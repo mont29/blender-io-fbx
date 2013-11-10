@@ -32,77 +32,136 @@ from mathutils import Vector, Matrix
 from . import encode_bin
 
 
-# for convenience
-E = encode_bin.FBXElem
-
-
 # "Constants"
 FBX_HEADER_VERSION = 1003
 FBX_VERSION = 7300
 
 
+# Helpers to generate single-data elements.
+# Note: elem may be None, in this case the element is not added to any parent.
+def elem_empty(elem, name):
+    sub_elem = encode_bin.FBXElem(name)
+    if elem is not None:
+        elem.elems.append(sub_elem)
+    return sub_elem
+
+
+def _elem_data_single(elem, name, value, func_name):
+    sub_elem = elem_empty(elem, name)
+    getattr(sub_elem, func_name)(value)
+    return sub_elem
+
+
+def elem_data_single_bool(elem, name, value):
+    return _elem_data_single(elem, name, value, "add_bool")
+
+
+def elem_data_single_int16(elem, name, value):
+    return _elem_data_single(elem, name, value, "add_int16")
+
+
+def elem_data_single_int32(elem, name, value):
+    return _elem_data_single(elem, name, value, "add_int32")
+
+
+def elem_data_single_int64(elem, name, value):
+    return _elem_data_single(elem, name, value, "add_int64")
+
+
+def elem_data_single_float32(elem, name, value):
+    return _elem_data_single(elem, name, value, "add_float32")
+
+
+def elem_data_single_float64(elem, name, value):
+    return _elem_data_single(elem, name, value, "add_float64")
+
+
+def elem_data_single_bytes(elem, name, value):
+    return _elem_data_single(elem, name, value, "add_bytes")
+
+
+def elem_data_single_string(elem, name, value):
+    return _elem_data_single(elem, name, value, "add_string")
+
+
+def elem_data_single_string_unicode(elem, name, value):
+    return _elem_data_single(elem, name, value, "add_string_unicode")
+
+
+def elem_data_single_bool_array(elem, name, value):
+    return _elem_data_single(elem, name, value, "add_bool_array")
+
+
+def elem_data_single_int32_array(elem, name, value):
+    return _elem_data_single(elem, name, value, "add_int32_array")
+
+
+def elem_data_single_int64_array(elem, name, value):
+    return _elem_data_single(elem, name, value, "add_int64_array")
+
+
+def elem_data_single_float32_array(elem, name, value):
+    return _elem_data_single(elem, name, value, "add_float32_array")
+
+
+def elem_data_single_float64_array(elem, name, value):
+    return _elem_data_single(elem, name, value, "add_float64_array")
+
+
+def elem_data_single_byte_array(elem, name, value):
+    return _elem_data_single(elem, name, value, "add_byte_array")
+
+
 # Helpers to generate standard FBXProperties70 properties...
 # XXX Looks like there can be various variations of formats here... Will have to be checked ultimately!
 def elem_props_set_bool(elem, name, value):
-    p = E(b"P")
-    p.add_string(name)
+    p = elem_data_single_string(elem, b"P", name)
     p.add_string(b"bool")
     p.add_string(b"")
     p.add_string(b"")
     p.add_bool(value)
-    elem.elems.append(p)
 
 
 def elem_props_set_integer(elem, name, value):
-    p = E(b"P")
-    p.add_string(name)
+    p = elem_data_single_string(elem, b"P", name)
     p.add_string(b"int")
     p.add_string(b"Integer")
     p.add_string(b"")
     p.add_int32(value)
-    elem.elems.append(p)
 
 
 def elem_props_set_enum(elem, name, value):
-    p = E(b"P")
-    p.add_string(name)
+    p = elem_data_single_string(elem, b"P", name)
     p.add_string(b"enum")
     p.add_string(b"")
     p.add_string(b"")
     p.add_int32(value)
-    elem.elems.append(p)
 
 
 def elem_props_set_number(elem, name, value):
-    p = E(b"P")
-    p.add_string(name)
+    p = elem_data_single_string(elem, b"P", name)
     p.add_string(b"double")
     p.add_string(b"Number")
     p.add_string(b"")
     p.add_float64(value)
-    elem.elems.append(p)
 
 
 def elem_props_set_color_rgb(elem, name, value):
-    p = E(b"P")
-    p.add_string(name)
+    p = elem_data_single_string(elem, b"P", name)
     p.add_string(b"ColorRGB")
     p.add_string(b"Color")
     p.add_string(b"")
     p.add_float64(value[0])
     p.add_float64(value[1])
     p.add_float64(value[2])
-    elem.elems.append(p)
 
 
 def elem_props_set_string_ex(elem, name, value, subtype):
-    p = E(b"P")
-    p.add_string(name)
+    p = elem_data_single_string(elem, b"P", name)
     p.add_string(b"KString")
     p.add_string(subtype)
     p.add_string(b"")
     p.add_string_unicode(value)
-    elem.elems.append(p)
 
 
 def elem_props_set_string(elem, name, value):
@@ -114,13 +173,11 @@ def elem_props_set_string_url(elem, name, value):
 
 
 def elem_props_set_timestamp(elem, name, value):
-    p = E(b"P")
-    p.add_string(name)
+    p = elem_data_single_string(elem, b"P", name)
     p.add_string(b"KTime")
     p.add_string(b"Time")
     p.add_string(b"")
     p.add_int64(value)
-    elem.elems.append(p)
 
 
 # Various FBX parts generators.
@@ -130,83 +187,50 @@ def fbx_header_elements(root, time=None):
     time is expected to be a datetime.datetime object, or None (using now() in this case).
     """
     ##### Start of FBXHeaderExtension element.
-    header_ext = E(b"FBXHeaderExtension")
+    header_ext = elem_empty(root, b"FBXHeaderExtension")
 
-    elem = E(b"FBXHeaderVersion")
-    elem.add_int32(FBX_HEADER_VERSION)
-    header_ext.elems.append(elem)
+    elem_data_single_int32(header_ext, b"FBXHeaderVersion", FBX_HEADER_VERSION)
 
-    elem = E(b"FBXVersion")
-    elem.add_int32(FBX_VERSION)
-    header_ext.elems.append(elem)
+    elem_data_single_int32(header_ext, b"FBXVersion", FBX_VERSION)
 
     # No encryption!
-    elem = E(b"EncryptionType")
-    elem.add_int32(0)
-    header_ext.elems.append(elem)
+    elem_data_single_int32(header_ext, b"EncryptionType", 0)
 
     if time is None:
         time = datetime.datetime.now()
-    elem = E(b"CreationTimeStamp")
-    selem = E(b"Version")
-    selem.add_int32(1000)
-    elem.elems.append(selem)
-    selem = E(b"Year")
-    selem.add_int32(time.year)
-    elem.elems.append(selem)
-    selem = E(b"Month")
-    selem.add_int32(time.month)
-    elem.elems.append(selem)
-    selem = E(b"Day")
-    selem.add_int32(time.day)
-    elem.elems.append(selem)
-    selem = E(b"Hour")
-    selem.add_int32(time.hour)
-    elem.elems.append(selem)
-    selem = E(b"Minute")
-    selem.add_int32(time.minute)
-    elem.elems.append(selem)
-    selem = E(b"Second")
-    selem.add_int32(time.second)
-    elem.elems.append(selem)
-    selem = E(b"Millisecond")
-    selem.add_int32(time.microsecond * 1000)
-    elem.elems.append(selem)
-    header_ext.elems.append(elem)
+    elem = elem_empty(header_ext, b"CreationTimeStamp")
+    elem_data_single_int32(elem, b"Version", 1000)
+    elem_data_single_int32(elem, b"Year", time.year)
+    elem_data_single_int32(elem, b"Month", time.month)
+    elem_data_single_int32(elem, b"Day", time.day)
+    elem_data_single_int32(elem, b"Hour", time.hour)
+    elem_data_single_int32(elem, b"Minute", time.minute)
+    elem_data_single_int32(elem, b"Second", time.second)
+    elem_data_single_int32(elem, b"Millisecond", time.microsecond * 1000)
 
-    elem = E(b"Creator")
-    elem.add_string_unicode("Blender version %s" % bpy.app.version_string)
-    header_ext.elems.append(elem)
+    elem_data_single_string_unicode(header_ext, b"Creator", "Blender version %s" % bpy.app.version_string)
 
     # Skip 'SceneInfo' element for now...
 
-    root.elems.append(header_ext)
     ##### End of FBXHeaderExtension element.
 
     # FileID is replaced by dummy value currently...
-    elem = E(b"FileId")
-    elem.add_bytes(b"FooBar")
-    root.elems.append(elem)
+    elem_data_single_bytes(root, b"FileId", b"FooBar")
 
     # CreationTime is replaced by dummy value currently, but anyway...
-    elem = E(b"CreationTime")
-    elem.add_string_unicode("{:04}-{:02}-{:02} {:02}:{:02}:{:02}:{:03}"
-                            "".format(time.year, time.month, time.day, time.hour, time.minute, time.second,
-                                      time.microsecond * 1000))
-    root.elems.append(elem)
+    elem_data_single_string_unicode(root, b"CreationTime",
+                                    "{:04}-{:02}-{:02} {:02}:{:02}:{:02}:{:03}"
+                                    "".format(time.year, time.month, time.day, time.hour, time.minute, time.second,
+                                              time.microsecond * 1000))
 
-    elem = E(b"Creator")
-    elem.add_string_unicode("Blender version %s" % bpy.app.version_string)
-    root.elems.append(elem)
+    elem_data_single_string_unicode(root, b"Creator", "Blender version %s" % bpy.app.version_string)
 
     ##### Start of GlobalSettings element.
-    global_settings = E(b"GlobalSettings")
+    global_settings = elem_empty(root, b"GlobalSettings")
 
-    elem = E(b"Version")
-    elem.add_int32(1000)
-    global_settings.elems.append(elem)
+    elem_data_single_int32(global_settings, b"Version", 1000)
 
-    props = E(b"Properties70")
+    props = elem_empty(global_settings, b"Properties70")
     elem_props_set_integer(props, b"UpAxis", 1)
     elem_props_set_integer(props, b"UpAxisSign", 1)
     elem_props_set_integer(props, b"FrontAxis", 2)
@@ -220,9 +244,7 @@ def fbx_header_elements(root, time=None):
     elem_props_set_enum(props, b"TimeMode", 11)
     elem_props_set_timestamp(props, b"TimeSpanStart", 0)
     elem_props_set_timestamp(props, b"TimeSpanStop", 479181389250)
-    global_settings.elems.append(props)
 
-    root.elems.append(props)
     ##### End of GlobalSettings element.
 
 
@@ -268,7 +290,7 @@ def save_single(operator, scene, filepath="",
     # collect images to copy
     copy_set = set()
 
-    root = encode_bin.FBXElem(b"")  # Root element has no id, as it is not saved per se!
+    root = elem_empty(None, b"")  # Root element has no id, as it is not saved per se!
 
     fbx_header_elements(root)
     # Building the whole FBX scene would be here!
