@@ -25,6 +25,7 @@ import datetime
 import math
 import os
 import time
+import collections.abc
 
 import bpy
 from mathutils import Vector, Matrix
@@ -37,6 +38,67 @@ FBX_HEADER_VERSION = 1003
 FBX_VERSION = 7300
 
 
+# Helpers to generate/manage IDs
+# ID class (mere int).
+class UID(int):
+    pass
+
+
+# IDs storage (singleton).
+class FBXID(collections.abc.Mapping):
+    _fbxid = None
+
+    def __new__(cls):
+        if cls._fbxid is not None:
+            return cls._fbxid
+        return super(FBXID, cls).__new__(cls)
+
+    def __init__(self):
+        cls = self.__class__
+        if cls._fbxid is not None:
+            assert(self == cls._fbxid)
+            return
+
+        self.keys_to_uids = {}
+        self.uids_to_keys = {}
+        cls._fbxid = self
+
+    def _value_to_uid(self, value):
+        # TODO: check this is robust enough for our needs!
+        # Note: we assume we have already checked the related key wasn't yet in FBXID!
+        if isinstance(value, int) and 0 <= value < 2**64:
+            # We can use value directly as id!
+            uid = value
+        else:
+            uid = hash(value)
+        # Make sure our uid *is* unique.
+        while uid in self.uids_to_keys:
+            uid += 1
+        return UID(uid)
+
+    def add(self, key, value=None):
+        """If value is None, key is used as value as well. Return the id"""
+        if key in self.keys_to_uids:
+            return self.keys_to_uids[key]
+        uid = self._value_to_uid(value)
+        self.keys_to_uids[key] = uid
+        self.uids_to_keys[uid] = key
+        return uid
+
+    # Mapping API
+    def __len__(self):
+        return len(self.keys_to_uids)
+
+    def __getitem__(self, key):
+        if isinstance(key, UID):
+            return self.uids_to_keys[key]
+        return self.keys_to_uids[key]
+
+    def __iter__(self):
+        # No choice here, we can't be smart, always iter over keys_to_uid...
+        return iter(self.keys_to_uids)
+
+
 # Helpers to generate single-data elements.
 # Note: elem may be None, in this case the element is not added to any parent.
 def elem_empty(elem, name):
@@ -44,6 +106,10 @@ def elem_empty(elem, name):
     if elem is not None:
         elem.elems.append(sub_elem)
     return sub_elem
+
+
+def elem_properties(elem):
+    return elem_empty(elem, b"Properties70")
 
 
 def _elem_data_single(elem, name, value, func_name):
@@ -180,6 +246,15 @@ def elem_props_set_timestamp(elem, name, value):
     p.add_int64(value)
 
 
+def elem_props_set_object(elem, name, value):
+    p = elem_data_single_string(elem, b"P", name)
+    p.add_string(b"object")
+    p.add_string(b"")
+    p.add_string(b"")
+    # XXX Check this! No value for this prop???
+    #p.add_string_unicode(value)
+
+
 # Various FBX parts generators.
 def fbx_header_elements(root, time=None):
     """
@@ -230,7 +305,7 @@ def fbx_header_elements(root, time=None):
 
     elem_data_single_int32(global_settings, b"Version", 1000)
 
-    props = elem_empty(global_settings, b"Properties70")
+    props = elem_properties(global_settings)
     elem_props_set_integer(props, b"UpAxis", 1)
     elem_props_set_integer(props, b"UpAxisSign", 1)
     elem_props_set_integer(props, b"FrontAxis", 2)
@@ -246,6 +321,33 @@ def fbx_header_elements(root, time=None):
     elem_props_set_timestamp(props, b"TimeSpanStop", 479181389250)
 
     ##### End of GlobalSettings element.
+
+
+def fbx_document_elements(root, name=""):
+    """
+    Write 'Document' part of FBX root.
+    Seems like FBX support multiple documents, but until I find examples of such, we'll stick to single doc!
+    time is expected to be a datetime.datetime object, or None (using now() in this case).
+    """
+    fbxid = FBXID()
+
+    ##### Start of Documents element.
+    docs = elem_empty(root, b"Documents")
+
+    elem_data_single_int32(docs, b"Count", 1)
+
+    doc_uid = fbxid.add("__FBX_Document__" + name)
+    doc = elem_data_single_int64(docs, b"Document", doc_uid)
+    doc.add_string(b"")
+    doc.add_string_unicode(name)
+
+    props = elem_properties(doc)
+    elem_props_set_object(props, b"SourceObject", "")
+    elem_props_set_string(props, b"ActiveAnimStackName", "")
+
+    # XXX Probably some kind of offset? Binary one?
+    #     Anyway, as long as we have only one doc, probably not an issue.
+    elem_data_single_int64(doc, b"RootNode", 0)
 
 
 # This func can be called with just the filepath
@@ -293,9 +395,11 @@ def save_single(operator, scene, filepath="",
     root = elem_empty(None, b"")  # Root element has no id, as it is not saved per se!
 
     fbx_header_elements(root)
+
+    fbx_document_elements(root, scene.name)
     # Building the whole FBX scene would be here!
 
-    encode_bin.write(filepath, root, 7300)
+    encode_bin.write(filepath, root, FBX_VERSION)
 
     # copy all collected files.
     bpy_extras.io_utils.path_reference_copy(copy_set)
