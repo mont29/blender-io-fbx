@@ -181,79 +181,32 @@ def elem_data_single_byte_array(elem, name, value):
 
 # Helpers to generate standard FBXProperties70 properties...
 # XXX Looks like there can be various variations of formats here... Will have to be checked ultimately!
-def elem_props_set_bool(elem, name, value):
+
+# Properties definitions, format: (b"type_1", b"type_2", b"type_3", "name_set_value_1", "name_set_value_2", ...)
+FBX_PROPERTIES_DEFINITIONS = {
+    "p_bool": (b"bool", b"", b"", "add_bool"),
+    "p_integer": (b"int", b"Integer", b"", "add_int32"),
+    "p_enum": (b"enum", b"", b"", "add_int32"),
+    "p_number": (b"double", b"Number", b"", "add_float64"),
+    "p_color_rgb": (b"ColorRGB", b"Color", b"", "add_float64", "add_float64", "add_float64"),
+    "p_string": (b"KString", b"", b"", "add_string_unicode"),
+    "p_string_url": (b"KString", b"Url", b"", "add_string_unicode"),
+    "p_timestamp": (b"KTime", b"Time", b"", "add_int64"),
+    "p_object": (b"object", b"", b""),  # XXX Check this! No value for this prop???
+}
+
+
+def elem_props_set(elem, ptype, name, value=None):
     p = elem_data_single_string(elem, b"P", name)
-    p.add_string(b"bool")
-    p.add_string(b"")
-    p.add_string(b"")
-    p.add_bool(value)
-
-
-def elem_props_set_integer(elem, name, value):
-    p = elem_data_single_string(elem, b"P", name)
-    p.add_string(b"int")
-    p.add_string(b"Integer")
-    p.add_string(b"")
-    p.add_int32(value)
-
-
-def elem_props_set_enum(elem, name, value):
-    p = elem_data_single_string(elem, b"P", name)
-    p.add_string(b"enum")
-    p.add_string(b"")
-    p.add_string(b"")
-    p.add_int32(value)
-
-
-def elem_props_set_number(elem, name, value):
-    p = elem_data_single_string(elem, b"P", name)
-    p.add_string(b"double")
-    p.add_string(b"Number")
-    p.add_string(b"")
-    p.add_float64(value)
-
-
-def elem_props_set_color_rgb(elem, name, value):
-    p = elem_data_single_string(elem, b"P", name)
-    p.add_string(b"ColorRGB")
-    p.add_string(b"Color")
-    p.add_string(b"")
-    p.add_float64(value[0])
-    p.add_float64(value[1])
-    p.add_float64(value[2])
-
-
-def elem_props_set_string_ex(elem, name, value, subtype):
-    p = elem_data_single_string(elem, b"P", name)
-    p.add_string(b"KString")
-    p.add_string(subtype)
-    p.add_string(b"")
-    p.add_string_unicode(value)
-
-
-def elem_props_set_string(elem, name, value):
-    elem_props_set_string_ex(elem, name, value, b"")
-
-
-def elem_props_set_string_url(elem, name, value):
-    elem_props_set_string_ex(elem, name, value, b"Url")
-
-
-def elem_props_set_timestamp(elem, name, value):
-    p = elem_data_single_string(elem, b"P", name)
-    p.add_string(b"KTime")
-    p.add_string(b"Time")
-    p.add_string(b"")
-    p.add_int64(value)
-
-
-def elem_props_set_object(elem, name, value):
-    p = elem_data_single_string(elem, b"P", name)
-    p.add_string(b"object")
-    p.add_string(b"")
-    p.add_string(b"")
-    # XXX Check this! No value for this prop???
-    #p.add_string_unicode(value)
+    ptype = FBX_PROPERTIES_DEFINITIONS[ptype]
+    for t in ptype[:3]:
+        p.add_string(t)
+    if len(ptype) == 4:
+        getattr(p, ptype[3])(value)
+    elif len(ptype) > 4:
+        # We assume value is iterable, else it's a bug!
+        for callback, val in zip(ptype[3:], value):
+            getattr(p, callback)(val)
 
 
 # Various FBX parts generators.
@@ -307,19 +260,19 @@ def fbx_header_elements(root, time=None):
     elem_data_single_int32(global_settings, b"Version", 1000)
 
     props = elem_properties(global_settings)
-    elem_props_set_integer(props, b"UpAxis", 1)
-    elem_props_set_integer(props, b"UpAxisSign", 1)
-    elem_props_set_integer(props, b"FrontAxis", 2)
-    elem_props_set_integer(props, b"FrontAxisSign", 1)
-    elem_props_set_integer(props, b"CoordAxis", 0)
-    elem_props_set_integer(props, b"CoordAxisSign", 1)
-    elem_props_set_number(props, b"UnitScaleFactor", 1.0)
-    elem_props_set_color_rgb(props, b"AmbientColor", (0.0, 0.0, 0.0))
-    elem_props_set_string(props, b"DefaultCamera", "")
+    elem_props_set(props, "p_integer", b"UpAxis", 1)
+    elem_props_set(props, "p_integer", b"UpAxisSign", 1)
+    elem_props_set(props, "p_integer", b"FrontAxis", 2)
+    elem_props_set(props, "p_integer", b"FrontAxisSign", 1)
+    elem_props_set(props, "p_integer", b"CoordAxis", 0)
+    elem_props_set(props, "p_integer", b"CoordAxisSign", 1)
+    elem_props_set(props, "p_number", b"UnitScaleFactor", 1.0)
+    elem_props_set(props, "p_color_rgb", b"AmbientColor", (0.0, 0.0, 0.0))
+    elem_props_set(props, "p_string", b"DefaultCamera", "")
     # XXX Those time stuff is taken from a file, have no (complete) idea what it means!
-    elem_props_set_enum(props, b"TimeMode", 11)
-    elem_props_set_timestamp(props, b"TimeSpanStart", 0)
-    elem_props_set_timestamp(props, b"TimeSpanStop", 479181389250)
+    elem_props_set(props, "p_enum", b"TimeMode", 11)
+    elem_props_set(props, "p_timestamp", b"TimeSpanStart", 0)
+    elem_props_set(props, "p_timestamp", b"TimeSpanStop", 479181389250)
 
     ##### End of GlobalSettings element.
 
@@ -343,8 +296,8 @@ def fbx_documents_elements(root, name=""):
     doc.add_string_unicode(name)
 
     props = elem_properties(doc)
-    elem_props_set_object(props, b"SourceObject", "")
-    elem_props_set_string(props, b"ActiveAnimStackName", "")
+    elem_props_set(props, "p_object", b"SourceObject")
+    elem_props_set(props, "p_string", b"ActiveAnimStackName", "")
 
     # XXX Probably some kind of offset? Binary one?
     #     Anyway, as long as we have only one doc, probably not an issue.
