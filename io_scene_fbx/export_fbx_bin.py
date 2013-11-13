@@ -66,6 +66,7 @@ class FBXID(collections.abc.Mapping):
     def _value_to_uid(self, value):
         # TODO: check this is robust enough for our needs!
         # Note: we assume we have already checked the related key wasn't yet in FBXID!
+        # XXX FBX's int64 is signed, this *may* be a problem (or not...).
         if isinstance(value, int) and 0 <= value < 2**64:
             # We can use value directly as id!
             uid = value
@@ -323,7 +324,7 @@ def fbx_header_elements(root, time=None):
     ##### End of GlobalSettings element.
 
 
-def fbx_document_elements(root, name=""):
+def fbx_documents_elements(root, name=""):
     """
     Write 'Document' part of FBX root.
     Seems like FBX support multiple documents, but until I find examples of such, we'll stick to single doc!
@@ -348,6 +349,41 @@ def fbx_document_elements(root, name=""):
     # XXX Probably some kind of offset? Binary one?
     #     Anyway, as long as we have only one doc, probably not an issue.
     elem_data_single_int64(doc, b"RootNode", 0)
+
+
+def fbx_references_elements(root):
+    """
+    Have no idea what references are in FBX currently... Just writing empty element.
+    """
+    docs = elem_empty(root, b"References")
+
+
+def fbx_definitions_elements(root):
+    """
+    Templates definitions. Only used by Objects data afaik (apart from dummy GlobalSettings one).
+    """
+    docs = elem_empty(root, b"Definitions")
+
+
+def fbx_objects_elements(root):
+    """
+    Data (objects, geometry, material, textures, armatures, etc.
+    """
+    docs = elem_empty(root, b"Objects")
+
+
+def fbx_connections_elements(root):
+    """
+    Relations between Objects (which material uses which texture, and so on).
+    """
+    docs = elem_empty(root, b"Connections")
+
+
+def fbx_takes_elements(root):
+    """
+    Animations. Have yet to check how this work...
+    """
+    docs = elem_empty(root, b"Takes")
 
 
 # This func can be called with just the filepath
@@ -394,11 +430,26 @@ def save_single(operator, scene, filepath="",
 
     root = elem_empty(None, b"")  # Root element has no id, as it is not saved per se!
 
+    # Mostly FBXHeaderExtension and GlobalSettings.
     fbx_header_elements(root)
 
-    fbx_document_elements(root, scene.name)
-    # Building the whole FBX scene would be here!
+    # Documents and References are pretty much void currently.
+    fbx_documents_elements(root, scene.name)
+    fbx_references_elements(root)
 
+    # Templates definitions.
+    fbx_definitions_elements(root)
+
+    # Actual data.
+    fbx_objects_elements(root)
+
+    # How data are inter-connected.
+    fbx_connections_elements(root)
+
+    # Animation.
+    fbx_takes_elements(root)
+
+    # And we are down, we can write the whole thing!
     encode_bin.write(filepath, root, FBX_VERSION)
 
     # copy all collected files.
