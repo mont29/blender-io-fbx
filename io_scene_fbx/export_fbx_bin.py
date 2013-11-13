@@ -34,11 +34,13 @@ from . import encode_bin
 
 
 # "Constants"
-FBX_HEADER_VERSION = 1003
 FBX_VERSION = 7300
+FBX_HEADER_VERSION = 1003
+FBX_TEMPLATES_VERSION = 100
 
 
-# Helpers to generate/manage IDs
+##### UIDs code. #####
+
 # ID class (mere int).
 class UID(int):
     pass
@@ -100,7 +102,8 @@ class FBXID(collections.abc.Mapping):
         return iter(self.keys_to_uids)
 
 
-# Helpers to generate single-data elements.
+##### Element generators. #####
+
 # Note: elem may be None, in this case the element is not added to any parent.
 def elem_empty(elem, name):
     sub_elem = encode_bin.FBXElem(name)
@@ -179,15 +182,21 @@ def elem_data_single_byte_array(elem, name, value):
     return _elem_data_single(elem, name, value, "add_byte_array")
 
 
-# Helpers to generate standard FBXProperties70 properties...
-# XXX Looks like there can be various variations of formats here... Will have to be checked ultimately!
+##### Generators for standard FBXProperties70 properties. #####
 
 # Properties definitions, format: (b"type_1", b"type_2", b"type_3", "name_set_value_1", "name_set_value_2", ...)
+# XXX Looks like there can be various variations of formats here... Will have to be checked ultimately!
+#     Among other things, what are those "A"/"A+"/"AU" codes?
 FBX_PROPERTIES_DEFINITIONS = {
     "p_bool": (b"bool", b"", b"", "add_bool"),
     "p_integer": (b"int", b"Integer", b"", "add_int32"),
     "p_enum": (b"enum", b"", b"", "add_int32"),
     "p_number": (b"double", b"Number", b"", "add_float64"),
+    "p_visibility": (b"Visibility", b"", b"A+", "add_float64"),
+    "p_vector_3d": (b"Vector3D", b"Vector", b"", "add_float64", "add_float64", "add_float64"),
+    "p_lcl_translation": (b"Lcl Translation", b"", b"A+", "add_float64", "add_float64", "add_float64"),
+    "p_lcl_rotation": (b"Lcl Rotation", b"", b"A+", "add_float64", "add_float64", "add_float64"),
+    "p_lcl_scaling": (b"Lcl Scaling", b"", b"A+", "add_float64", "add_float64", "add_float64"),
     "p_color_rgb": (b"ColorRGB", b"Color", b"", "add_float64", "add_float64", "add_float64"),
     "p_string": (b"KString", b"", b"", "add_string_unicode"),
     "p_string_url": (b"KString", b"Url", b"", "add_string_unicode"),
@@ -209,7 +218,182 @@ def elem_props_set(elem, ptype, name, value=None):
             getattr(p, callback)(val)
 
 
-# Various FBX parts generators.
+##### Templates #####
+# TODO: check all those "default" values, they should match Blender's default as much as possible, I guess?
+
+class FBXTemplate():
+    """
+    Represent a template for a given type of data.
+    """
+    def __init__(self, type_name, prop_type_name, properties, nbr_users=0):
+        """
+        type_name is the name to the objects' element (as bytes).
+        prop_type_name is the name of the included PropertyTemplate element.
+        properties represents FBXProperties70 data - a dict of tuples {name: (value, type)}.
+        """
+        self.type_name = type_name
+        self.prop_type_name = prop_type_name
+        self.properties = properties
+        self.nbr_users = nbr_users
+
+    def generate(self, root):
+        template = elem_data_single_string(root, b"ObjectType", b"Model")
+        elem_data_single_int32(template, b"Count", self.nbr_users)
+
+        if self.properties:
+            elem = elem_data_single_string(template, b"PropertyTemplate", self.prop_type_name)
+            props = elem_properties(elem)
+            for name, (value, ptype) in self.properties.items():
+                elem_props_set(props, ptype, name, value)
+
+
+def fbx_template_def_globalsettings(override_defaults={}, nbr_users=0):
+    props = override_defaults  # No properties, by default.
+    return FBXTemplate(b"GlobalSettings", b"", props, nbr_users)
+
+
+def fbx_template_def_model(override_defaults={}, nbr_users=0):
+    props = {
+        b"QuaternionInterpolate": (False, "p_bool"),
+        b"RotationOffset": ((0.0, 0.0, 0.0), "p_vector_3d"),
+        b"RotationPivot": ((0.0, 0.0, 0.0), "p_vector_3d"),
+        b"ScalingOffset": ((0.0, 0.0, 0.0), "p_vector_3d"),
+        b"ScalingPivot": ((0.0, 0.0, 0.0), "p_vector_3d"),
+        b"TranslationActive": (False, "p_bool"),
+        b"TranslationMin": ((0.0, 0.0, 0.0), "p_vector_3d"),
+        b"TranslationMax": ((0.0, 0.0, 0.0), "p_vector_3d"),
+        b"TranslationMinX": (False, "p_bool"),
+        b"TranslationMinY": (False, "p_bool"),
+        b"TranslationMinZ": (False, "p_bool"),
+        b"TranslationMaxX": (False, "p_bool"),
+        b"TranslationMaxY": (False, "p_bool"),
+        b"TranslationMaxZ": (False, "p_bool"),
+        b"RotationOrder": (0, "p_enum"),
+        b"RotationSpaceForLimitOnly": (False, "p_bool"),
+        b"RotationStiffnessX": (0.0, "p_number"),
+        b"RotationStiffnessY": (0.0, "p_number"),
+        b"RotationStiffnessZ": (0.0, "p_number"),
+        b"AxisLen": (10.0, "p_number"),
+        b"PreRotation": ((0.0, 0.0, 0.0), "p_vector_3d"),
+        b"PostRotation": ((0.0, 0.0, 0.0), "p_vector_3d"),
+        b"RotationActive": (False, "p_bool"),
+        b"RotationMin": ((0.0, 0.0, 0.0), "p_vector_3d"),
+        b"RotationMax": ((0.0, 0.0, 0.0), "p_vector_3d"),
+        b"RotationMinX": (False, "p_bool"),
+        b"RotationMinY": (False, "p_bool"),
+        b"RotationMinZ": (False, "p_bool"),
+        b"RotationMaxX": (False, "p_bool"),
+        b"RotationMaxY": (False, "p_bool"),
+        b"RotationMaxZ": (False, "p_bool"),
+        b"InheritType": (0, "p_enum"),
+        b"ScalingActive": (False, "p_bool"),
+        b"ScalingMin": ((0.0, 0.0, 0.0), "p_vector_3d"),
+        b"ScalingMax": ((1.0, 1.0, 1.0), "p_vector_3d"),
+        b"ScalingMinX": (False, "p_bool"),
+        b"ScalingMinY": (False, "p_bool"),
+        b"ScalingMinZ": (False, "p_bool"),
+        b"ScalingMaxX": (False, "p_bool"),
+        b"ScalingMaxY": (False, "p_bool"),
+        b"ScalingMaxZ": (False, "p_bool"),
+        b"GeometricTranslation": ((0.0, 0.0, 0.0), "p_vector_3d"),
+        b"GeometricRotation": ((0.0, 0.0, 0.0), "p_vector_3d"),
+        b"GeometricScaling": ((1.0, 1.0, 1.0), "p_vector_3d"),
+        b"MinDampRangeX": (0.0, "p_number"),
+        b"MinDampRangeY": (0.0, "p_number"),
+        b"MinDampRangeZ": (0.0, "p_number"),
+        b"MaxDampRangeX": (0.0, "p_number"),
+        b"MaxDampRangeY": (0.0, "p_number"),
+        b"MaxDampRangeZ": (0.0, "p_number"),
+        b"MinDampStrengthX": (0.0, "p_number"),
+        b"MinDampStrengthY": (0.0, "p_number"),
+        b"MinDampStrengthZ": (0.0, "p_number"),
+        b"MaxDampStrengthX": (0.0, "p_number"),
+        b"MaxDampStrengthY": (0.0, "p_number"),
+        b"MaxDampStrengthZ": (0.0, "p_number"),
+        b"PreferedAngleX": (0.0, "p_number"),
+        b"PreferedAngleY": (0.0, "p_number"),
+        b"PreferedAngleZ": (0.0, "p_number"),
+        b"LookAtProperty": (None, "p_object"),
+        b"UpVectorProperty": (None, "p_object"),
+        b"Show": (True, "p_bool"),
+        b"NegativePercentShapeSupport": (True, "p_bool"),
+        b"DefaultAttributeIndex": (-1, "p_integer"),
+        b"Freeze": (False, "p_bool"),
+        b"LODBox": (False, "p_bool"),
+        b"Lcl Translation": ((0.0, 0.0, 0.0), "p_lcl_translation"),
+        b"Lcl Rotation": ((0.0, 0.0, 0.0), "p_lcl_rotation"),
+        b"Lcl Scaling": ((1.0, 1.0, 1.0), "p_lcl_scaling"),
+        b"Visibility": (1.0, "p_visibility"),
+    }
+    props.update(override_defaults)
+    return FBXTemplate(b"Model", b"KFbxNode", props, nbr_users)
+
+
+def fbx_template_def_nodeattribute(override_defaults={}, nbr_users=0):
+    props = {
+        b"Color": ((0.8, 0.8, 0.8), "p_color_rgb"),
+        b"Camera Index": (1, "p_integer"),
+    }
+    props.update(override_defaults)
+    return FBXTemplate(b"NodeAttribute", b"KFbxCameraSwitcher", props, nbr_users)
+
+
+def fbx_template_def_geometry(override_defaults={}, nbr_users=0):
+    props = {
+        b"Color": ((0.8, 0.8, 0.8), "p_color_rgb"),
+        b"BBoxMin": ((0.0, 0.0, 0.0), "p_vector_3d"),
+        b"BBoxMax": ((0.0, 0.0, 0.0), "p_vector_3d"),
+    }
+    props.update(override_defaults)
+    return FBXTemplate(b"Geometry", b"KFbxMesh", props, nbr_users)
+
+
+def fbx_template_def_material(override_defaults={}, nbr_users=0):
+    props = {
+        b"ShadingModel": ("Lambert", "p_string"),
+        b"MultiLayer": (False, "p_bool"),
+        b"EmissiveColor": ((0.0, 0.0, 0.0), "p_color_rgb"),
+        b"EmissiveFactor": (1.0, "p_number"),
+        b"AmbientColor": ((0.2, 0.2, 0.2), "p_color_rgb"),
+        b"AmbientFactor": (1.0, "p_number"),
+        b"DiffuseColor": ((0.8, 0.8, 0.8), "p_color_rgb"),
+        b"DiffuseFactor": (1.0, "p_number"),
+        b"Bump": ((0.0, 0.0, 0.0), "p_vector_3d"),
+        b"NormalMap": ((0.0, 0.0, 0.0), "p_vector_3d"),
+        b"BumpFactor": (1.0, "p_number"),
+        b"TransparentColor": ((0.0, 0.0, 0.0), "p_color_rgb"),
+        b"TransparencyFactor": (0.0, "p_number"),
+        b"DisplacementColor": ((0.0, 0.0, 0.0), "p_color_rgb"),
+        b"DisplacementFactor": (1.0, "p_number"),
+    }
+    props.update(override_defaults)
+    return FBXTemplate(b"Material", b"KFbxSurfaceLambert", props, nbr_users)
+
+
+def fbx_template_def_pose(override_defaults={}, nbr_users=0):
+    props = override_defaults  # No properties, by default.
+    return FBXTemplate(b"Pose", b"", props, nbr_users)
+
+
+##### Top-level FBX data container. #####
+class FBXData():
+    """
+    Helper container gathering some data we need multiple times:
+        * templates.
+        * objects.
+        * connections.
+        * takes.
+    """
+    def __init__(self, scene, object_types):
+        # For now, pretty much empty!
+        self.templates = {
+            b"GlobalSettings": fbx_template_def_globalsettings(nbr_users=1),
+        }
+        self.templates_users = sum(tmpl.nbr_users for tmpl in self.templates.values())
+
+
+##### Top-level FBX elements generators. #####
+
 def fbx_header_elements(root, time=None):
     """
     Write boiling code of FBX root.
@@ -311,33 +495,41 @@ def fbx_references_elements(root):
     docs = elem_empty(root, b"References")
 
 
-def fbx_definitions_elements(root):
+def fbx_definitions_elements(root, scene_data):
     """
     Templates definitions. Only used by Objects data afaik (apart from dummy GlobalSettings one).
     """
-    docs = elem_empty(root, b"Definitions")
+    definitions = elem_empty(root, b"Definitions")
+
+    elem_data_single_int32(definitions, b"Version", FBX_TEMPLATES_VERSION)
+    elem_data_single_int32(definitions, b"Count", scene_data.templates_users)
+
+    for tmpl in scene_data.templates.values():
+        tmpl.generate(definitions)
 
 
-def fbx_objects_elements(root):
+def fbx_objects_elements(root, scene_data):
     """
     Data (objects, geometry, material, textures, armatures, etc.
     """
-    docs = elem_empty(root, b"Objects")
+    objects = elem_empty(root, b"Objects")
 
 
-def fbx_connections_elements(root):
+def fbx_connections_elements(root, scene_data):
     """
     Relations between Objects (which material uses which texture, and so on).
     """
-    docs = elem_empty(root, b"Connections")
+    connections = elem_empty(root, b"Connections")
 
 
-def fbx_takes_elements(root):
+def fbx_takes_elements(root, scene_data):
     """
     Animations. Have yet to check how this work...
     """
-    docs = elem_empty(root, b"Takes")
+    takes = elem_empty(root, b"Takes")
 
+
+##### "Main" functions. #####
 
 # This func can be called with just the filepath
 def save_single(operator, scene, filepath="",
@@ -357,6 +549,9 @@ def save_single(operator, scene, filepath="",
                 use_default_take=True,
                 **kwargs
                 ):
+
+    # XXX Temp, during dev...
+    object_types = {'EMPTY', 'CAMERA', 'LAMP', 'MESH'}
 
     import bpy_extras.io_utils
 
@@ -381,6 +576,9 @@ def save_single(operator, scene, filepath="",
     # collect images to copy
     copy_set = set()
 
+    # Generate some data about exported scene...
+    scene_data = FBXData(scene, object_types)
+
     root = elem_empty(None, b"")  # Root element has no id, as it is not saved per se!
 
     # Mostly FBXHeaderExtension and GlobalSettings.
@@ -391,16 +589,16 @@ def save_single(operator, scene, filepath="",
     fbx_references_elements(root)
 
     # Templates definitions.
-    fbx_definitions_elements(root)
+    fbx_definitions_elements(root, scene_data)
 
     # Actual data.
-    fbx_objects_elements(root)
+    fbx_objects_elements(root, scene_data)
 
     # How data are inter-connected.
-    fbx_connections_elements(root)
+    fbx_connections_elements(root, scene_data)
 
     # Animation.
-    fbx_takes_elements(root)
+    fbx_takes_elements(root, scene_data)
 
     # And we are down, we can write the whole thing!
     encode_bin.write(filepath, root, FBX_VERSION)
