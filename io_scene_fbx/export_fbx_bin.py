@@ -25,7 +25,9 @@ import datetime
 import math
 import os
 import time
-import collections.abc
+
+import collections
+from collections import namedtuple
 
 import bpy
 from mathutils import Vector, Matrix
@@ -46,60 +48,50 @@ class UID(int):
     pass
 
 
-# IDs storage (singleton).
-class FBXID(collections.abc.Mapping):
-    _fbxid = None
+# UIDs storage.
+_keys_to_uids = {}
+_uids_to_keys = {}
 
-    def __new__(cls):
-        if cls._fbxid is not None:
-            return cls._fbxid
-        return super(FBXID, cls).__new__(cls)
 
-    def __init__(self):
-        cls = self.__class__
-        if cls._fbxid is not None:
-            assert(self == cls._fbxid)
-            return
+def _key_to_uid(uids, key):
+    # TODO: check this is robust enough for our needs!
+    # Note: we assume we have already checked the related key wasn't yet in _keys_to_uids!
+    # XXX FBX's int64 is signed, this *may* be a problem (or not...).
+    if isinstance(key, int) and 0 <= key < 2**64:
+        # We can use value directly as id!
+        uid = key
+    else:
+        uid = hash(key)
+    # Make sure our uid *is* unique.
+    if uid in uids:
+        inc = 1 if uid < 2**63 else -1
+        while uid in uids:
+            uid += inc
+            if 0 > uid >= 2**64:
+                # Note that this is more that unlikely, but does not harm anyway...
+                raise ValueError("Unable to generate an UID for key {}".format(key))
+    return UID(uid)
 
-        self.keys_to_uids = {}
-        self.uids_to_keys = {}
-        cls._fbxid = self
 
-    def _value_to_uid(self, value):
-        # TODO: check this is robust enough for our needs!
-        # Note: we assume we have already checked the related key wasn't yet in FBXID!
-        # XXX FBX's int64 is signed, this *may* be a problem (or not...).
-        if isinstance(value, int) and 0 <= value < 2**64:
-            # We can use value directly as id!
-            uid = value
-        else:
-            uid = hash(value)
-        # Make sure our uid *is* unique.
-        while uid in self.uids_to_keys:
-            uid += 1
-        return UID(uid)
+def get_fbxuid_from_key(key):
+    """
+    Return an UID for given key, which is assumed hasable.
+    """
+    uid = _keys_to_uids.get(key, None)
+    if uid is None:
+        uid = _key_to_uid(_uids_to_keys, key)
+        _keys_to_uids[key] = uid
+        _uids_to_keys[uid] = key
+    return uid
 
-    def add(self, key, value=None):
-        """If value is None, key is used as value as well. Return the id"""
-        if key in self.keys_to_uids:
-            return self.keys_to_uids[key]
-        uid = self._value_to_uid(value)
-        self.keys_to_uids[key] = uid
-        self.uids_to_keys[uid] = key
-        return uid
 
-    # Mapping API
-    def __len__(self):
-        return len(self.keys_to_uids)
-
-    def __getitem__(self, key):
-        if isinstance(key, UID):
-            return self.uids_to_keys[key]
-        return self.keys_to_uids[key]
-
-    def __iter__(self):
-        # No choice here, we can't be smart, always iter over keys_to_uid...
-        return iter(self.keys_to_uids)
+# XXX Not sure we'll actually need this one? 
+def get_key_from_fbxuid(uid):
+    """
+    Return the key which generated this uid.
+    """
+    assert(uid.__class__ == UID)
+    return _uids_to_keys.get(uid, None)
 
 
 ##### Element generators. #####
@@ -221,30 +213,18 @@ def elem_props_set(elem, ptype, name, value=None):
 ##### Templates #####
 # TODO: check all those "default" values, they should match Blender's default as much as possible, I guess?
 
-class FBXTemplate():
-    """
-    Represent a template for a given type of data.
-    """
-    def __init__(self, type_name, prop_type_name, properties, nbr_users=0):
-        """
-        type_name is the name to the objects' element (as bytes).
-        prop_type_name is the name of the included PropertyTemplate element.
-        properties represents FBXProperties70 data - a dict of tuples {name: (value, type)}.
-        """
-        self.type_name = type_name
-        self.prop_type_name = prop_type_name
-        self.properties = properties
-        self.nbr_users = nbr_users
+FBXTemplate = namedtuple("FBXTemplate", ("type_name", "prop_type_name", "properties", "nbr_users"))
 
-    def generate(self, root):
-        template = elem_data_single_string(root, b"ObjectType", b"Model")
-        elem_data_single_int32(template, b"Count", self.nbr_users)
 
-        if self.properties:
-            elem = elem_data_single_string(template, b"PropertyTemplate", self.prop_type_name)
-            props = elem_properties(elem)
-            for name, (value, ptype) in self.properties.items():
-                elem_props_set(props, ptype, name, value)
+def fbx_template_generate(root, fbx_template):
+    template = elem_data_single_string(root, b"ObjectType", b"Model")
+    elem_data_single_int32(template, b"Count", fbx_template.nbr_users)
+
+    if fbx_template.properties:
+        elem = elem_data_single_string(template, b"PropertyTemplate", fbx_template.prop_type_name)
+        props = elem_properties(elem)
+        for name, (value, ptype) in fbx_template.properties.items():
+            elem_props_set(props, ptype, name, value)
 
 
 def fbx_template_def_globalsettings(override_defaults={}, nbr_users=0):
@@ -376,20 +356,22 @@ def fbx_template_def_pose(override_defaults={}, nbr_users=0):
 
 
 ##### Top-level FBX data container. #####
-class FBXData():
-    """
-    Helper container gathering some data we need multiple times:
-        * templates.
-        * objects.
-        * connections.
-        * takes.
-    """
-    def __init__(self, scene, object_types):
-        # For now, pretty much empty!
-        self.templates = {
-            b"GlobalSettings": fbx_template_def_globalsettings(nbr_users=1),
-        }
-        self.templates_users = sum(tmpl.nbr_users for tmpl in self.templates.values())
+
+# Helper container gathering some data we need multiple times:
+#     * templates.
+#     * objects.
+#     * connections.
+#     * takes.
+FBXData = namedtuple("FBXData", ("templates", "templates_users"))
+
+
+def fbx_data_from_scene(scene, object_types):
+    # For now, pretty much empty!
+    templates = {
+        b"GlobalSettings": fbx_template_def_globalsettings(nbr_users=1),
+    }
+    templates_users = sum(tmpl.nbr_users for tmpl in templates.values())
+    return FBXData(templates, templates_users)
 
 
 ##### Top-level FBX elements generators. #####
@@ -467,14 +449,12 @@ def fbx_documents_elements(root, name=""):
     Seems like FBX support multiple documents, but until I find examples of such, we'll stick to single doc!
     time is expected to be a datetime.datetime object, or None (using now() in this case).
     """
-    fbxid = FBXID()
-
     ##### Start of Documents element.
     docs = elem_empty(root, b"Documents")
 
     elem_data_single_int32(docs, b"Count", 1)
 
-    doc_uid = fbxid.add("__FBX_Document__" + name)
+    doc_uid = get_fbxuid_from_key("__FBX_Document__" + name)
     doc = elem_data_single_int64(docs, b"Document", doc_uid)
     doc.add_string(b"")
     doc.add_string_unicode(name)
@@ -505,7 +485,7 @@ def fbx_definitions_elements(root, scene_data):
     elem_data_single_int32(definitions, b"Count", scene_data.templates_users)
 
     for tmpl in scene_data.templates.values():
-        tmpl.generate(definitions)
+        fbx_template_generate(definitions, tmpl)
 
 
 def fbx_objects_elements(root, scene_data):
@@ -577,7 +557,7 @@ def save_single(operator, scene, filepath="",
     copy_set = set()
 
     # Generate some data about exported scene...
-    scene_data = FBXData(scene, object_types)
+    scene_data = fbx_data_from_scene(scene, object_types)
 
     root = elem_empty(None, b"")  # Root element has no id, as it is not saved per se!
 
