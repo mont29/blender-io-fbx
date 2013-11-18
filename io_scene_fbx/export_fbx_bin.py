@@ -94,6 +94,17 @@ def get_key_from_fbxuid(uid):
     return _uids_to_keys.get(uid, None)
 
 
+# Blender-specific key generators
+def get_blenderID_key(bid):
+    return "B" + bid.rna_type.name + "::" + bid.name
+
+
+def get_blender_camera_keys(cam):
+    """Return cam + cam switcher keys."""
+    key = get_blenderID_key(cam)
+    return key, key + "_switcher"
+
+
 ##### Element generators. #####
 
 # Note: elem may be None, in this case the element is not added to any parent.
@@ -267,7 +278,7 @@ def fbx_template_def_model(override_defaults={}, nbr_users=0):
         b"RotationMaxZ": (False, "p_bool"),
         b"InheritType": (0, "p_enum"),
         b"ScalingActive": (False, "p_bool"),
-        b"ScalingMin": ((0.0, 0.0, 0.0), "p_vector_3d"),
+        b"ScalingMin": ((1.0, 1.0, 1.0), "p_vector_3d"),
         b"ScalingMax": ((1.0, 1.0, 1.0), "p_vector_3d"),
         b"ScalingMinX": (False, "p_bool"),
         b"ScalingMinY": (False, "p_bool"),
@@ -309,13 +320,23 @@ def fbx_template_def_model(override_defaults={}, nbr_users=0):
     return FBXTemplate(b"Model", b"KFbxNode", props, nbr_users)
 
 
-def fbx_template_def_nodeattribute(override_defaults={}, nbr_users=0):
+def fbx_template_def_nodeattribute_camera(override_defaults={}, nbr_users=0):
+    props = override_defaults
+    return FBXTemplate(b"NodeAttribute", b"KFbxCamera", props, nbr_users)
+
+
+def fbx_template_def_nodeattribute_cameraswitcher(override_defaults={}, nbr_users=0):
     props = {
         b"Color": ((0.8, 0.8, 0.8), "p_color_rgb"),
         b"Camera Index": (1, "p_integer"),
     }
     props.update(override_defaults)
     return FBXTemplate(b"NodeAttribute", b"KFbxCameraSwitcher", props, nbr_users)
+
+
+def fbx_template_def_nodeattribute_light(override_defaults={}, nbr_users=0):
+    props = override_defaults
+    return FBXTemplate(b"NodeAttribute", b"KFbxLight", props, nbr_users)
 
 
 def fbx_template_def_geometry(override_defaults={}, nbr_users=0):
@@ -362,16 +383,37 @@ def fbx_template_def_pose(override_defaults={}, nbr_users=0):
 #     * objects.
 #     * connections.
 #     * takes.
-FBXData = namedtuple("FBXData", ("templates", "templates_users"))
+FBXData = namedtuple("FBXData", ("templates", "templates_users", "objects", "cameras", "meshes"))
 
 
 def fbx_data_from_scene(scene, object_types):
-    # For now, pretty much empty!
+    """
+    Do some pre-processing over scene's data...
+    """
     templates = {
         b"GlobalSettings": fbx_template_def_globalsettings(nbr_users=1),
     }
+
+    # This is rather simple for now, maybe we could end generating templates with most-used values
+    # instead of default ones?
+    objects = {obj for obj in scene.objects if obj.type in object_types}
+    cameras = {obj for obj in objects if obj.type == 'CAMERA'}
+    meshes = {obj for obj in objects if obj.type == 'MESH'}
+
+    if objects:
+        # We use len(object) + len(camera) because of the CameraSwitcher objects...
+        templates[b"Model"] = fbx_template_def_model(nbr_users=len(objects) + len(cameras))
+
+    if cameras:
+        nbr = len(cameras)
+        templates[b"NodeAttribute::Camera"] = fbx_template_def_nodeattribute_camera(nbr_users=nbr)
+        templates[b"NodeAttribute::CameraSwitcher"] = fbx_template_def_nodeattribute_cameraswitcher(nbr_users=nbr)
+
+    if meshes:
+        templates[b"Geometry"] = fbx_template_def_geometry(nbr_users=len(meshes))
+
     templates_users = sum(tmpl.nbr_users for tmpl in templates.values())
-    return FBXData(templates, templates_users)
+    return FBXData(templates, templates_users, objects, cameras, meshes)
 
 
 ##### Top-level FBX elements generators. #####
@@ -493,6 +535,15 @@ def fbx_objects_elements(root, scene_data):
     Data (objects, geometry, material, textures, armatures, etc.
     """
     objects = elem_empty(root, b"Objects")
+
+    for cam in scene_data.cameras:
+        pass
+
+    for mesh in scene_data.meshes:
+        pass
+
+    for obj in scene_data.objects:
+        pass
 
 
 def fbx_connections_elements(root, scene_data):
