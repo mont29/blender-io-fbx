@@ -255,9 +255,8 @@ FBX_PROPERTIES_DEFINITIONS = {
 }
 
 
-def elem_props_set(elem, ptype, name, value=None):
+def _elem_props_set(elem, ptype, name, value):
     p = elem_data_single_string(elem, b"P", name)
-    ptype = FBX_PROPERTIES_DEFINITIONS[ptype]
     for t in ptype[:3]:
         p.add_string(t)
     if len(ptype) == 4:
@@ -266,6 +265,25 @@ def elem_props_set(elem, ptype, name, value=None):
         # We assume value is iterable, else it's a bug!
         for callback, val in zip(ptype[3:], value):
             getattr(p, callback)(val)
+
+
+def elem_props_set(elem, ptype, name, value=None):
+    ptype = FBX_PROPERTIES_DEFINITIONS[ptype]
+    _elem_props_set(elem, ptype, name, value)
+
+
+def elem_props_template_set(template, elem, ptype_name, name, value):
+    """
+    Only add a prop if the same value is not already defined in given template.
+    Note it is important to not give iterators as value, here!
+    """
+    ptype = FBX_PROPERTIES_DEFINITIONS[ptype_name]
+    tmpl_val, tmpl_ptype = template.properties.get(name, (None, None))
+    if tmpl_ptype is not None:
+        if ((len(ptype) == 4 and (tmpl_val, tmpl_ptype) == (value, ptype_name)) or
+            (len(ptype) > 4 and (tuple(tmpl_val), tmpl_ptype) == (tuple(value), ptype_name))):
+            return  # Already in template and same value.
+    _elem_props_set(elem, ptype, name, value)
 
 
 ##### Templates #####
@@ -483,8 +501,9 @@ def fbx_data_cameras_elements(root, cam_obj, scene_data):
     cam_switcher.add_string(fbx_name_class(b"", b"NodeAttribute"))
     cam_switcher.add_string(b"CameraSwitcher")
 
+    tmpl = scene_data.templates[b"NodeAttribute::CameraSwitcher"]
     props = elem_properties(cam_switcher)
-    elem_props_set(props, "p_integer", b"Camera Index", 100)
+    elem_props_template_set(tmpl, props, "p_integer", b"Camera Index", 100)
 
     elem_data_single_int32(cam_switcher, b"Version", 101)
     elem_data_single_string_unicode(cam_switcher, b"Name", cam_data.name + " switcher")
@@ -515,32 +534,34 @@ def fbx_data_cameras_elements(root, cam_obj, scene_data):
     cam.add_string(fbx_name_class(b"", b"NodeAttribute"))
     cam.add_string(b"Camera")
 
+    tmpl = scene_data.templates[b"NodeAttribute::Camera"]
     props = elem_properties(cam)
-    elem_props_set(props, "p_vector_3d", b"Position", loc)
-    elem_props_set(props, "p_vector_3d", b"UpVector", up)
-    elem_props_set(props, "p_vector_3d", b"InterestPosition", to)
-    elem_props_set(props, "p_color_rgb", b"BackgroundColor", (0.0, 0.0, 0.0))  # Should we use world value?
-    elem_props_set(props, "p_bool", b"DisplayTurnTableIcon", True)
+    elem_props_template_set(tmpl, props, "p_vector_3d", b"Position", loc)
+    elem_props_template_set(tmpl, props, "p_vector_3d", b"UpVector", up)
+    elem_props_template_set(tmpl, props, "p_vector_3d", b"InterestPosition", to)
+    # Should we use world value?
+    elem_props_template_set(tmpl, props, "p_color_rgb", b"BackgroundColor", (0.0, 0.0, 0.0))
+    elem_props_template_set(tmpl, props, "p_bool", b"DisplayTurnTableIcon", True)
 
-    elem_props_set(props, "p_number", b"FilmWidth", filmwidth)
-    elem_props_set(props, "p_number", b"FilmHeight", filmheight)
-    elem_props_set(props, "p_number", b"FilmAspectRatio", filmaspect)
-    elem_props_set(props, "p_number", b"FilmOffsetX", offsetx)
-    elem_props_set(props, "p_number", b"FilmOffsetY", offsety)
+    elem_props_template_set(tmpl, props, "p_number", b"FilmWidth", filmwidth)
+    elem_props_template_set(tmpl, props, "p_number", b"FilmHeight", filmheight)
+    elem_props_template_set(tmpl, props, "p_number", b"FilmAspectRatio", filmaspect)
+    elem_props_template_set(tmpl, props, "p_number", b"FilmOffsetX", offsetx)
+    elem_props_template_set(tmpl, props, "p_number", b"FilmOffsetY", offsety)
 
-    elem_props_set(props, "p_enum", b"ApertureMode", 3)  # FocalLength.
-    elem_props_set(props, "p_enum", b"GateFit", 2)  # FitHorizontal.
-    # Why in hell such specific props here???
-    elem_props_set(props, "p_fov", b"FieldOfView", math.degrees(cam_data.angle_x))
-    elem_props_set(props, "p_fov_x", b"FieldOfViewX", math.degrees(cam_data.angle_x))
-    elem_props_set(props, "p_fov_y", b"FieldOfViewY", math.degrees(cam_data.angle_y))
-    elem_props_set(props, "p_number", b"FocalLength", cam_data.lens)  # No need to convert to inches here?
-    elem_props_set(props, "p_number", b"SafeAreaAspectRatio", aspect)
+    elem_props_template_set(tmpl, props, "p_enum", b"ApertureMode", 3)  # FocalLength.
+    elem_props_template_set(tmpl, props, "p_enum", b"GateFit", 2)  # FitHorizontal.
+    elem_props_template_set(tmpl, props, "p_fov", b"FieldOfView", math.degrees(cam_data.angle_x))
+    elem_props_template_set(tmpl, props, "p_fov_x", b"FieldOfViewX", math.degrees(cam_data.angle_x))
+    elem_props_template_set(tmpl, props, "p_fov_y", b"FieldOfViewY", math.degrees(cam_data.angle_y))
+    # No need to convert to inches here...
+    elem_props_template_set(tmpl, props, "p_number", b"FocalLength", cam_data.lens)
+    elem_props_template_set(tmpl, props, "p_number", b"SafeAreaAspectRatio", aspect)
 
-    elem_props_set(props, "p_number", b"NearPlane", cam_data.clip_start * scene_data.global_scale)
-    elem_props_set(props, "p_number", b"FarPlane", cam_data.clip_end * scene_data.global_scale)
-    elem_props_set(props, "p_enum", b"BackPlaneDistanceMode", 1)  # RelativeToCamera.
-    elem_props_set(props, "p_number", b"BackPlaneDistance", cam_data.clip_end * scene_data.global_scale)
+    elem_props_template_set(tmpl, props, "p_number", b"NearPlane", cam_data.clip_start * scene_data.global_scale)
+    elem_props_template_set(tmpl, props, "p_number", b"FarPlane", cam_data.clip_end * scene_data.global_scale)
+    elem_props_template_set(tmpl, props, "p_enum", b"BackPlaneDistanceMode", 1)  # RelativeToCamera.
+    elem_props_template_set(tmpl, props, "p_number", b"BackPlaneDistance", cam_data.clip_end * scene_data.global_scale)
 
     elem_data_single_string(cam, b"TypeFlags", b"Camera")
     elem_data_single_int32(cam, b"GeometryVersion", 124)
