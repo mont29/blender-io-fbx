@@ -39,6 +39,7 @@ from . import encode_bin
 FBX_VERSION = 7300
 FBX_HEADER_VERSION = 1003
 FBX_TEMPLATES_VERSION = 100
+FBX_MODELS_VERSION = 232
 
 FBX_NAME_CLASS_SEP = b"\x00\x01"
 
@@ -135,7 +136,7 @@ def get_blenderID_key(bid):
 def get_blender_camera_keys(cam):
     """Return cam + cam switcher keys."""
     key = get_blenderID_key(cam)
-    return key, key + "_switcher"
+    return key, key + "_switcher", key + "_switcher_object"
 
 
 ##### Element generators. #####
@@ -235,7 +236,7 @@ def elem_data_vec_float64(elem, name, value):
 # XXX Looks like there can be various variations of formats here... Will have to be checked ultimately!
 #     Among other things, what are those "A"/"A+"/"AU" codes?
 FBX_PROPERTIES_DEFINITIONS = {
-    "p_bool": (b"bool", b"", b"", "add_bool"),
+    "p_bool": (b"bool", b"", b"", "add_int32"),  # Yes, int32 for a bool (and they do have a core bool type)!!!
     "p_integer": (b"int", b"Integer", b"", "add_int32"),
     "p_enum": (b"enum", b"", b"", "add_int32"),
     "p_number": (b"double", b"Number", b"", "add_float64"),
@@ -286,6 +287,14 @@ def elem_props_template_set(template, elem, ptype_name, name, value):
     _elem_props_set(elem, ptype, name, value)
 
 
+##### Generators for connection elements. #####
+
+def  elem_connection(elem, c_type, uid_src, uid_dst):
+    e = elem_data_single_string(elem, b"C", c_type)
+    e.add_int64(uid_src)
+    e.add_int64(uid_dst)
+
+
 ##### Templates #####
 # TODO: check all those "default" values, they should match Blender's default as much as possible, I guess?
 
@@ -293,7 +302,7 @@ FBXTemplate = namedtuple("FBXTemplate", ("type_name", "prop_type_name", "propert
 
 
 def fbx_template_generate(root, fbx_template):
-    template = elem_data_single_string(root, b"ObjectType", b"Model")
+    template = elem_data_single_string(root, b"ObjectType", fbx_template.type_name)
     elem_data_single_int32(template, b"Count", fbx_template.nbr_users)
 
     if fbx_template.properties:
@@ -457,11 +466,11 @@ def object_tx(ob, scene_data):
     matrix_rot = rot.to_matrix()
 
     # Lamps and camera need to be rotated.
-    if ob and ob.type in {'LAMP', 'CAMERA'}:
+    if ob.type == 'LAMP':
         matrix_rot = matrix_rot * MTX_X90
-    #elif ob and ob.type == 'CAMERA':
-        #y = matrix_rot * Vector((0.0, 1.0, 0.0))
-        #matrix_rot = Matrix.Rotation(math.pi / 2.0, 3, y) * matrix_rot
+    elif ob.type == 'CAMERA':
+        y = matrix_rot * Vector((0.0, 1.0, 0.0))
+        matrix_rot = Matrix.Rotation(math.pi / 2.0, 3, y) * matrix_rot
 
     rot = matrix_rot.to_euler()
 
@@ -489,16 +498,16 @@ def fbx_name_class(name, cls):
     return FBX_NAME_CLASS_SEP.join((name, cls))
 
 
-def fbx_data_cameras_elements(root, cam_obj, scene_data):
+def fbx_data_camera_elements(root, cam_obj, scene_data):
     """
     Write the Camera and CameraSwitcher data blocks.
     """
     cam_data = cam_obj.data
-    cam_key, cam_switcher_key = scene_data.data_cameras[cam_obj]
+    cam_key, cam_switcher_key, cam_switcher_object_key = scene_data.data_cameras[cam_obj]
 
     # Have no idea what are cam switchers...
     cam_switcher = elem_data_single_int64(root, b"NodeAttribute", get_fbxuid_from_key(cam_switcher_key))
-    cam_switcher.add_string(fbx_name_class(b"", b"NodeAttribute"))
+    cam_switcher.add_string(fbx_name_class(cam_data.name.encode() + b"_switcher", b"NodeAttribute"))
     cam_switcher.add_string(b"CameraSwitcher")
 
     tmpl = scene_data.templates[b"NodeAttribute::CameraSwitcher"]
@@ -531,7 +540,7 @@ def fbx_data_cameras_elements(root, cam_obj, scene_data):
     offsety = filmaspect * filmheight * cam_data.shift_y
 
     cam = elem_data_single_int64(root, b"NodeAttribute", get_fbxuid_from_key(cam_key))
-    cam.add_string(fbx_name_class(b"", b"NodeAttribute"))
+    cam.add_string(fbx_name_class(cam_data.name.encode(), b"NodeAttribute"))
     cam.add_string(b"Camera")
 
     tmpl = scene_data.templates[b"NodeAttribute::Camera"]
@@ -572,6 +581,64 @@ def fbx_data_cameras_elements(root, cam_obj, scene_data):
     elem_data_single_int32(cam, b"ShowAudio", 0)
     elem_data_vec_float64(cam, b"AudioColor", (0.0, 1.0, 0.0))
     elem_data_single_float64(cam, b"CameraOrthoZoom", 1.0)
+
+
+def fbx_data_object_elements(root, obj, scene_data):
+    """
+    Write the Object (Model) data blocks.
+    """
+    obj_key = scene_data.objects[obj]
+    model = elem_data_single_int64(root, b"Model", get_fbxuid_from_key(obj_key))
+    model.add_string(fbx_name_class(obj.name.encode(), b"Model"))
+    model.add_string_unicode(obj.name)  # Not sure what this third data is supposed to contain, actually...
+
+    elem_data_single_int32(model, b"Version", FBX_MODELS_VERSION)
+
+    # Object transform info.
+    loc, rot, scale, matrix, matrix_rot = object_tx(obj, scene_data)
+
+    tmpl = scene_data.templates[b"Model"]
+    # For now add only loc/rot/scale...
+    props = elem_properties(model)
+    elem_props_template_set(tmpl, props, "p_lcl_translation", b"LCL Translation", loc)
+    elem_props_template_set(tmpl, props, "p_lcl_rotation", b"LCL Rotation", rot)
+    elem_props_template_set(tmpl, props, "p_lcl_scaling", b"LCL Scaling", scale)
+
+    # Those settings would obviously need to be edited in a complete version of the exporter, may depends on
+    # object type, etc.
+    elem_data_single_int32(model, b"MultiLayer", 0)
+    elem_data_single_int32(model, b"MultiTake", 0)
+    elem_data_single_bool(model, b"Shading", True)
+    elem_data_single_string(model, b"Culling", b"CullingOff")
+
+    if obj.type == 'CAMERA':
+        # Why, oh why are FBX cameras such a mess???
+        # And WHY add camera data HERE??? Not even sure this is needed...
+        render = scene_data.scene.render
+        width = render.resolution_x * 1.0
+        height = render.resolution_y * 1.0
+        elem_props_template_set(tmpl, props, "p_enum", b"ResolutionMode", 0)  # Don't know what it means
+        elem_props_template_set(tmpl, props, "p_number", b"AspectW", width)
+        elem_props_template_set(tmpl, props, "p_number", b"AspectH", height)
+        elem_props_template_set(tmpl, props, "p_bool", b"ViewFrustum", True)
+        elem_props_template_set(tmpl, props, "p_enum", b"BackgroundMode", 0)  # Don't know what it means
+        elem_props_template_set(tmpl, props, "p_bool", b"ForegroundTransparent", True)
+
+        # And - houra! - we also have to add a fake object for the cam switcher.
+        _1, _2, obj_cam_switcher_key = scene_data.data_cameras[obj]
+        cam_switcher_model = elem_data_single_int64(root, b"Model", get_fbxuid_from_key(obj_cam_switcher_key))
+        cam_switcher_model.add_string(fbx_name_class(obj.name.encode() + b"_switcher", b"Model"))
+        cam_switcher_model.add_string_unicode(obj.name + "_switcher")
+
+        elem_data_single_int32(cam_switcher_model, b"Version", FBX_MODELS_VERSION)
+
+        elem_properties(cam_switcher_model)
+        # Nothing to add (loc/rot/scale has no importance here).
+
+        elem_data_single_int32(cam_switcher_model, b"MultiLayer", 0)
+        elem_data_single_int32(cam_switcher_model, b"MultiTake", 1)
+        elem_data_single_bool(cam_switcher_model, b"Shading", True)
+        elem_data_single_string(cam_switcher_model, b"Culling", b"CullingOff")
 
 
 ##### Top-level FBX data container. #####
@@ -746,13 +813,13 @@ def fbx_objects_elements(root, scene_data):
     objects = elem_empty(root, b"Objects")
 
     for cam in scene_data.data_cameras.keys():
-        fbx_data_cameras_elements(objects, cam, scene_data)
+        fbx_data_camera_elements(objects, cam, scene_data)
 
     for mesh in scene_data.data_meshes:
         pass
 
-    for obj in scene_data.objects:
-        pass
+    for obj in scene_data.objects.keys():
+        fbx_data_object_elements(objects, obj, scene_data)
 
 
 def fbx_connections_elements(root, scene_data):
@@ -760,6 +827,22 @@ def fbx_connections_elements(root, scene_data):
     Relations between Objects (which material uses which texture, and so on).
     """
     connections = elem_empty(root, b"Connections")
+
+    for obj, obj_key in scene_data.objects.items():
+        par = obj.parent
+        par_key = 0
+        if par and par in scene_data.objects:
+            # TODO: Check this is the correct way to have object parenting!
+            par_key = scene_data.objects[par]
+        elem_connection(connections, b"OO", get_fbxuid_from_key(obj_key), get_fbxuid_from_key(par_key))
+
+    # And now, object data.
+    for obj_cam, (cam_key, cam_switcher_key, cam_obj_switcher_key) in scene_data.data_cameras.items():
+        # Looks like the 'object' ('Model' in FBX) for the camera switcher is not linked to anything in FBX...
+        elem_connection(connections, b"OO", get_fbxuid_from_key(cam_switcher_key),
+                        get_fbxuid_from_key(cam_obj_switcher_key))
+        cam_obj_key = scene_data.objects[obj_cam]
+        elem_connection(connections, b"OO", get_fbxuid_from_key(cam_key), get_fbxuid_from_key(cam_obj_key))
 
 
 def fbx_takes_elements(root, scene_data):
