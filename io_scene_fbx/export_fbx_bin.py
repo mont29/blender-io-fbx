@@ -40,6 +40,39 @@ FBX_VERSION = 7300
 FBX_HEADER_VERSION = 1003
 FBX_TEMPLATES_VERSION = 100
 
+FBX_NAME_CLASS_SEP = b"\x00\x01"
+
+
+# Default global matrix.
+MTX_GLOB = Matrix()
+# Used for camera and lamp rotations.
+MTX_X90 = Matrix.Rotation(math.pi / 2.0, 3, 'X')
+# Used for mesh and armature rotations.
+MTX4_Z90 = Matrix.Rotation(math.pi / 2.0, 4, 'Z')
+
+
+##### Misc utilities #####
+
+# Note: this could be in a utility (math.units e.g.)...
+
+UNITS = {
+    "meter": 1.0,  # Ref unit!
+    "kilometer": 0.001,
+    "millimeter": 1000.0,
+    "foot": 1.0 / 0.3048,
+    "inch": 1.0 / 0.0254,
+    "turn": 1.0,  # Ref unit!
+    "degree": 360.0,
+    "radian": math.pi * 2.0,
+}
+
+def units_convert(val, u_from, u_to):
+    """Convert value."""
+    conv = UNITS[u_to] / UNITS[u_from]
+    try:
+        return (v * conv for v in val)
+    except:
+        return val * conv
 
 ##### UIDs code. #####
 
@@ -125,6 +158,14 @@ def _elem_data_single(elem, name, value, func_name):
     return sub_elem
 
 
+def _elem_data_vec(elem, name, value, func_name):
+    sub_elem = elem_empty(elem, name)
+    func = getattr(sub_elem, func_name)
+    for v in value:
+        func(v)
+    return sub_elem
+
+
 def elem_data_single_bool(elem, name, value):
     return _elem_data_single(elem, name, value, "add_bool")
 
@@ -185,6 +226,9 @@ def elem_data_single_byte_array(elem, name, value):
     return _elem_data_single(elem, name, value, "add_byte_array")
 
 
+def elem_data_vec_float64(elem, name, value):
+    return _elem_data_vec(elem, name, value, "add_float64")
+
 ##### Generators for standard FBXProperties70 properties. #####
 
 # Properties definitions, format: (b"type_1", b"type_2", b"type_3", "name_set_value_1", "name_set_value_2", ...)
@@ -196,6 +240,9 @@ FBX_PROPERTIES_DEFINITIONS = {
     "p_enum": (b"enum", b"", b"", "add_int32"),
     "p_number": (b"double", b"Number", b"", "add_float64"),
     "p_visibility": (b"Visibility", b"", b"A+", "add_float64"),
+    "p_fov": (b"FieldOfView", b"", b"A+", "add_float64"),
+    "p_fov_x": (b"FieldOfViewX", b"", b"A+", "add_float64"),
+    "p_fov_y": (b"FieldOfViewY", b"", b"A+", "add_float64"),
     "p_vector_3d": (b"Vector3D", b"Vector", b"", "add_float64", "add_float64", "add_float64"),
     "p_lcl_translation": (b"Lcl Translation", b"", b"A+", "add_float64", "add_float64", "add_float64"),
     "p_lcl_rotation": (b"Lcl Rotation", b"", b"A+", "add_float64", "add_float64", "add_float64"),
@@ -376,6 +423,136 @@ def fbx_template_def_pose(override_defaults={}, nbr_users=0):
     return FBXTemplate(b"Pose", b"", props, nbr_users)
 
 
+##### FBX objects generators. #####
+
+def object_tx(ob, scene_data):
+    """
+    Generate object transform data (in parent space if parent exists and is exported, else in world space).
+    Applies specific rotation to lamps and cameras (conversion Blender -> FBX).
+    """
+    matrix = ob.matrix_world
+    # We only want transform relative to parent if parent is also exported!
+    if ob.parent and ob.parent in scene_data.objects:
+        matrix = ob.matrix_local
+
+    loc, rot, scale = matrix.decompose()
+    matrix_rot = rot.to_matrix()
+
+    # Lamps and camera need to be rotated.
+    if ob and ob.type in {'LAMP', 'CAMERA'}:
+        matrix_rot = matrix_rot * MTX_X90
+    #elif ob and ob.type == 'CAMERA':
+        #y = matrix_rot * Vector((0.0, 1.0, 0.0))
+        #matrix_rot = Matrix.Rotation(math.pi / 2.0, 3, y) * matrix_rot
+
+    rot = matrix_rot.to_euler()
+
+    return loc, rot, scale, matrix, matrix_rot
+
+
+def bone_tx(bone, scene_data):
+    """
+    Generate bone transform data (in parent space one if any, else in armature space).
+    """
+    matrix = bone.matrix_local * MTX4_Z90
+
+    if bone.parent:
+        par_matrix = bone.parent.matrix_local * MTX4_Z90
+        matrix = par_matrix.inverted() * matrix
+
+    loc, rot, scale = matrix.decompose()
+    matrix_rot = rot.to_matrix()
+    rot = rot.to_euler()  # quat -> euler
+
+    return loc, rot, scale, matrix, matrix_rot
+
+
+def fbx_name_class(name, cls):
+    return FBX_NAME_CLASS_SEP.join((name, cls))
+
+
+def fbx_data_cameras_elements(root, cam_obj, scene_data):
+    """
+    Write the Camera and CameraSwitcher data blocks.
+    """
+    cam_data = cam_obj.data
+    cam_key, cam_switcher_key = scene_data.data_cameras[cam_obj]
+
+    # Have no idea what are cam switchers...
+    cam_switcher = elem_data_single_int64(root, b"NodeAttribute", get_fbxuid_from_key(cam_switcher_key))
+    cam_switcher.add_string(fbx_name_class(b"", b"NodeAttribute"))
+    cam_switcher.add_string(b"CameraSwitcher")
+
+    props = elem_properties(cam_switcher)
+    elem_props_set(props, "p_integer", b"Camera Index", 100)
+
+    elem_data_single_int32(cam_switcher, b"Version", 101)
+    elem_data_single_string_unicode(cam_switcher, b"Name", cam_data.name + " switcher")
+    elem_data_single_int32(cam_switcher, b"CameraID", 100)  # ???
+    elem_data_single_int32(cam_switcher, b"CameraName", 100)  # ??? Integer???????
+    elem_empty(cam_switcher, b"CameraIndexName")  # ???
+
+    # Real data now, good old camera!
+    # Object transform info.
+    loc, rot, scale, matrix, matrix_rot = object_tx(cam_obj, scene_data)
+    up = matrix_rot * Vector((0.0, 1.0, 0.0))
+    to = matrix_rot * Vector((0.0, 0.0, -1.0))
+    # Render settings.
+    # TODO We could export much more...
+    render = scene_data.scene.render
+    width = render.resolution_x
+    height = render.resolution_y
+    aspect = width / height
+    # Film width & height from mm to inches
+    filmwidth = units_convert(cam_data.sensor_width, "millimeter", "inch")
+    filmheight = units_convert(cam_data.sensor_height, "millimeter", "inch")
+    filmaspect = filmwidth / filmheight
+    # Film offset
+    offsetx = filmwidth * cam_data.shift_x
+    offsety = filmaspect * filmheight * cam_data.shift_y
+
+    cam = elem_data_single_int64(root, b"NodeAttribute", get_fbxuid_from_key(cam_key))
+    cam.add_string(fbx_name_class(b"", b"NodeAttribute"))
+    cam.add_string(b"Camera")
+
+    props = elem_properties(cam)
+    elem_props_set(props, "p_vector_3d", b"Position", loc)
+    elem_props_set(props, "p_vector_3d", b"UpVector", up)
+    elem_props_set(props, "p_vector_3d", b"InterestPosition", to)
+    elem_props_set(props, "p_color_rgb", b"BackgroundColor", (0.0, 0.0, 0.0))  # Should we use world value?
+    elem_props_set(props, "p_bool", b"DisplayTurnTableIcon", True)
+
+    elem_props_set(props, "p_number", b"FilmWidth", filmwidth)
+    elem_props_set(props, "p_number", b"FilmHeight", filmheight)
+    elem_props_set(props, "p_number", b"FilmAspectRatio", filmaspect)
+    elem_props_set(props, "p_number", b"FilmOffsetX", offsetx)
+    elem_props_set(props, "p_number", b"FilmOffsetY", offsety)
+
+    elem_props_set(props, "p_enum", b"ApertureMode", 3)  # FocalLength.
+    elem_props_set(props, "p_enum", b"GateFit", 2)  # FitHorizontal.
+    # Why in hell such specific props here???
+    elem_props_set(props, "p_fov", b"FieldOfView", math.degrees(cam_data.angle_x))
+    elem_props_set(props, "p_fov_x", b"FieldOfViewX", math.degrees(cam_data.angle_x))
+    elem_props_set(props, "p_fov_y", b"FieldOfViewY", math.degrees(cam_data.angle_y))
+    elem_props_set(props, "p_number", b"FocalLength", cam_data.lens)  # No need to convert to inches here?
+    elem_props_set(props, "p_number", b"SafeAreaAspectRatio", aspect)
+
+    elem_props_set(props, "p_number", b"NearPlane", cam_data.clip_start * scene_data.global_scale)
+    elem_props_set(props, "p_number", b"FarPlane", cam_data.clip_end * scene_data.global_scale)
+    elem_props_set(props, "p_enum", b"BackPlaneDistanceMode", 1)  # RelativeToCamera.
+    elem_props_set(props, "p_number", b"BackPlaneDistance", cam_data.clip_end * scene_data.global_scale)
+
+    elem_data_single_string(cam, b"TypeFlags", b"Camera")
+    elem_data_single_int32(cam, b"GeometryVersion", 124)
+    elem_data_vec_float64(cam, b"Position", loc)
+    elem_data_vec_float64(cam, b"Up", up)
+    elem_data_vec_float64(cam, b"LookAt", to)
+    elem_data_single_int32(cam, b"ShowInfoOnMoving", 1)
+    elem_data_single_int32(cam, b"ShowAudio", 0)
+    elem_data_vec_float64(cam, b"AudioColor", (0.0, 1.0, 0.0))
+    elem_data_single_float64(cam, b"CameraOrthoZoom", 1.0)
+
+
 ##### Top-level FBX data container. #####
 
 # Helper container gathering some data we need multiple times:
@@ -383,10 +560,15 @@ def fbx_template_def_pose(override_defaults={}, nbr_users=0):
 #     * objects.
 #     * connections.
 #     * takes.
-FBXData = namedtuple("FBXData", ("templates", "templates_users", "objects", "cameras", "meshes"))
+FBXData = namedtuple("FBXData", (
+    "templates", "templates_users",
+    "global_matrix", "global_scale",
+    "scene", "objects", 
+    "data_cameras", "data_meshes",
+))
 
 
-def fbx_data_from_scene(scene, object_types):
+def fbx_data_from_scene(scene, object_types, global_matrix, global_scale):
     """
     Do some pre-processing over scene's data...
     """
@@ -396,24 +578,30 @@ def fbx_data_from_scene(scene, object_types):
 
     # This is rather simple for now, maybe we could end generating templates with most-used values
     # instead of default ones?
-    objects = {obj for obj in scene.objects if obj.type in object_types}
-    cameras = {obj for obj in objects if obj.type == 'CAMERA'}
-    meshes = {obj for obj in objects if obj.type == 'MESH'}
+    objects = {obj: get_blenderID_key(obj) for obj in scene.objects if obj.type in object_types}
+    # Unfortunately, FBX camera data contains object-level data (like position, orientation, etc.)...
+    data_cameras = {obj: get_blender_camera_keys(obj.data) for obj in objects if obj.type == 'CAMERA'}
+    data_meshes = {obj.data: get_blenderID_key(obj.data) for obj in objects if obj.type == 'MESH'}
 
     if objects:
-        # We use len(object) + len(camera) because of the CameraSwitcher objects...
-        templates[b"Model"] = fbx_template_def_model(nbr_users=len(objects) + len(cameras))
+        # We use len(object) + len(data_cameras) because of the CameraSwitcher objects...
+        templates[b"Model"] = fbx_template_def_model(nbr_users=len(objects) + len(data_cameras))
 
-    if cameras:
-        nbr = len(cameras)
+    if data_cameras:
+        nbr = len(data_cameras)
         templates[b"NodeAttribute::Camera"] = fbx_template_def_nodeattribute_camera(nbr_users=nbr)
         templates[b"NodeAttribute::CameraSwitcher"] = fbx_template_def_nodeattribute_cameraswitcher(nbr_users=nbr)
 
-    if meshes:
-        templates[b"Geometry"] = fbx_template_def_geometry(nbr_users=len(meshes))
+    if data_meshes:
+        templates[b"Geometry"] = fbx_template_def_geometry(nbr_users=len(data_meshes))
 
     templates_users = sum(tmpl.nbr_users for tmpl in templates.values())
-    return FBXData(templates, templates_users, objects, cameras, meshes)
+    return FBXData(
+        templates, templates_users,
+        global_matrix, global_scale,
+        scene, objects,
+        data_cameras, data_meshes,
+    )
 
 
 ##### Top-level FBX elements generators. #####
@@ -536,10 +724,10 @@ def fbx_objects_elements(root, scene_data):
     """
     objects = elem_empty(root, b"Objects")
 
-    for cam in scene_data.cameras:
-        pass
+    for cam in scene_data.data_cameras.keys():
+        fbx_data_cameras_elements(objects, cam, scene_data)
 
-    for mesh in scene_data.meshes:
+    for mesh in scene_data.data_meshes:
         pass
 
     for obj in scene_data.objects:
@@ -564,7 +752,7 @@ def fbx_takes_elements(root, scene_data):
 
 # This func can be called with just the filepath
 def save_single(operator, scene, filepath="",
-                global_matrix=None,
+                global_matrix=MTX_GLOB,
                 context_objects=None,
                 object_types={'EMPTY', 'CAMERA', 'LAMP', 'ARMATURE', 'MESH'},
                 use_mesh_modifiers=True,
@@ -589,16 +777,7 @@ def save_single(operator, scene, filepath="",
     print('\nFBX export starting... %r' % filepath)
     start_time = time.process_time()
 
-    # Only used for camera and lamp rotations
-    mtx_x90 = Matrix.Rotation(math.pi / 2.0, 3, 'X')
-    # Used for mesh and armature rotations
-    mtx4_z90 = Matrix.Rotation(math.pi / 2.0, 4, 'Z')
-
-    if global_matrix is None:
-        global_matrix = Matrix()
-        global_scale = 1.0
-    else:
-        global_scale = global_matrix.median_scale
+    global_scale = global_matrix.median_scale
 
     # Use this for working out paths relative to the export location
     base_src = os.path.dirname(bpy.data.filepath)
@@ -608,7 +787,7 @@ def save_single(operator, scene, filepath="",
     copy_set = set()
 
     # Generate some data about exported scene...
-    scene_data = fbx_data_from_scene(scene, object_types)
+    scene_data = fbx_data_from_scene(scene, object_types, global_matrix, global_scale)
 
     root = elem_empty(None, b"")  # Root element has no id, as it is not saved per se!
 
