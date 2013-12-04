@@ -35,3 +35,40 @@ FLOAT32_ARRAY = b'f'[0]
 FLOAT64_ARRAY = b'd'[0]
 BOOL_ARRAY = b'b'[0]
 BYTE_ARRAY = b'c'[0]
+
+# array types - actual length may vary (depending on underlying C implementation)!
+import array
+
+# For now, bytes and bool are assumed always 1byte.
+ARRAY_BOOL = 'b'
+ARRAY_BYTE = 'B'
+
+ARRAY_INT32 = None
+ARRAY_INT64 = None
+for _t in 'ilq':
+    size = array.array(_t).itemsize
+    if size == 4:
+        ARRAY_INT32 = _t
+    elif size == 8:
+        ARRAY_INT64 = _t
+    if ARRAY_INT32 and ARRAY_INT64:
+        break
+if not ARRAY_INT32:
+    raise Exception("Impossible to get an 4-bytes integer type for array!")
+if not ARRAY_INT64:
+    raise Exception("Impossible to get an 8-bytes integer type for array!")
+
+ARRAY_FLOAT32 = None
+ARRAY_FLOAT64 = None
+for _t in 'fd':
+    size = array.array(_t).itemsize
+    if size == 4:
+        ARRAY_FLOAT32 = _t
+    elif size == 8:
+        ARRAY_FLOAT64 = _t
+    if ARRAY_FLOAT32 and ARRAY_FLOAT64:
+        break
+if not ARRAY_FLOAT32:
+    raise Exception("Impossible to get an 4-bytes float type for array!")
+if not ARRAY_FLOAT64:
+    raise Exception("Impossible to get an 8-bytes float type for array!")
