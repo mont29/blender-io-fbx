@@ -20,8 +20,8 @@
 
 bl_info = {
     "name": "Autodesk FBX format",
-    "author": "Campbell Barton",
-    "blender": (2, 59, 0),
+    "author": "Campbell Barton, Bastien Montagne",
+    "blender": (2, 69, 4),
     "location": "File > Import-Export",
     "description": "Export FBX meshes, UV's, vertex colors, materials, "
                    "textures, cameras, lamps and actions",
@@ -37,6 +37,8 @@ if "bpy" in locals():
     import imp
     if "import_fbx" in locals():
         imp.reload(import_fbx)
+    if "export_fbx_bin" in locals():
+        imp.reload(export_fbx_bin)
     if "export_fbx" in locals():
         imp.reload(export_fbx)
 

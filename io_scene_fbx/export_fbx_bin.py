@@ -21,6 +21,7 @@
 # Script copyright (C) Campbell Barton, Bastien Montagne
 
 
+import array
 import datetime
 import math
 import os
@@ -32,14 +33,21 @@ from collections import namedtuple
 import bpy
 from mathutils import Vector, Matrix
 
-from . import encode_bin
+from . import encode_bin, data_types
 
 
 # "Constants"
 FBX_VERSION = 7300
 FBX_HEADER_VERSION = 1003
 FBX_TEMPLATES_VERSION = 100
+
 FBX_MODELS_VERSION = 232
+
+FBX_GEOMETRY_VERSION = 124
+FBX_GEOMETRY_NORMAL_VERSION = 101
+FBX_GEOMETRY_SMOOTHING_VERSION = 102
+FBX_GEOMETRY_MATERIAL_VERSION = 101
+FBX_GEOMETRY_LAYER_VERSION = 100
 
 FBX_NAME_CLASS_SEP = b"\x00\x01"
 
@@ -88,20 +96,24 @@ _uids_to_keys = {}
 
 
 def _key_to_uid(uids, key):
-    # TODO: check this is robust enough for our needs!
-    # Note: we assume we have already checked the related key wasn't yet in _keys_to_uids!
-    # XXX FBX's int64 is signed, this *may* be a problem (or not...).
-    if isinstance(key, int) and 0 <= key < 2**64:
+    # TODO: Check this is robust enough for our needs!
+    # Note: We assume we have already checked the related key wasn't yet in _keys_to_uids!
+    #       As int64 is signed in FBX, we keep uids below 2**63...
+    if isinstance(key, int) and 0 <= key < 2**63:
         # We can use value directly as id!
         uid = key
     else:
         uid = hash(key)
+        if uid < 0:
+            uid = -uid
+        if uid >= 2**63:
+            uid //= 2
     # Make sure our uid *is* unique.
     if uid in uids:
-        inc = 1 if uid < 2**63 else -1
+        inc = 1 if uid < 2**62 else -1
         while uid in uids:
             uid += inc
-            if 0 > uid >= 2**64:
+            if 0 > uid >= 2**63:
                 # Note that this is more that unlikely, but does not harm anyway...
                 raise ValueError("Unable to generate an UID for key {}".format(key))
     return UID(uid)
@@ -333,7 +345,7 @@ def fbx_template_def_model(override_defaults={}, nbr_users=0):
         b"TranslationMaxX": (False, "p_bool"),
         b"TranslationMaxY": (False, "p_bool"),
         b"TranslationMaxZ": (False, "p_bool"),
-        b"RotationOrder": (0, "p_enum"),
+        b"RotationOrder": (0, "p_enum"),  # 'XYZ'
         b"RotationSpaceForLimitOnly": (False, "p_bool"),
         b"RotationStiffnessX": (0.0, "p_number"),
         b"RotationStiffnessY": (0.0, "p_number"),
@@ -458,19 +470,22 @@ def object_tx(ob, scene_data):
     Applies specific rotation to lamps and cameras (conversion Blender -> FBX).
     """
     matrix = ob.matrix_world
-    # We only want transform relative to parent if parent is also exported!
+
     if ob.parent and ob.parent in scene_data.objects:
+        # We only want transform relative to parent if parent is also exported!
         matrix = ob.matrix_local
+    else:
+        # Only apply global transform (global space) to 'root' objects!
+        matrix = scene_data.global_matrix * matrix
 
     loc, rot, scale = matrix.decompose()
     matrix_rot = rot.to_matrix()
 
     # Lamps and camera need to be rotated.
     if ob.type == 'LAMP':
-        matrix_rot = matrix_rot * MTX_X90
+        matrix_rot = matrix_rot * Matrix.Rotation(math.pi / 2.0, 3, 'X')
     elif ob.type == 'CAMERA':
-        y = matrix_rot * Vector((0.0, 1.0, 0.0))
-        matrix_rot = Matrix.Rotation(math.pi / 2.0, 3, y) * matrix_rot
+        matrix_rot = matrix_rot * Matrix.Rotation(math.pi / 2.0, 3, 'Y')
 
     rot = matrix_rot.to_euler()
 
@@ -583,26 +598,121 @@ def fbx_data_camera_elements(root, cam_obj, scene_data):
     elem_data_single_float64(cam, b"CameraOrthoZoom", 1.0)
 
 
+def fbx_data_mesh_elements(root, me, scene_data):
+    """
+    Write the Mesh (Geometry) data block.
+    """
+    me_key = scene_data.data_meshes[me]
+    geom = elem_data_single_int64(root, b"Geometry", get_fbxuid_from_key(me_key))
+    geom.add_string(fbx_name_class(me.name.encode(), b"Geometry"))
+    geom.add_string(b"Mesh")  # Looks like a sub-type?
+
+    elem_data_single_int32(geom, b"GeometryVersion", FBX_GEOMETRY_VERSION)
+
+    # Vertex cos.
+    t_co = array.array(data_types.ARRAY_FLOAT64, [0.0] * len(me.vertices) * 3)
+    me.vertices.foreach_get("co", t_co)
+    elem_data_single_float64_array(geom, b"Vertices", t_co)
+    del t_co
+
+    # Polygon indices.
+    # A bit more complicated, as we have to ^-1 last index of each loop.
+    t_vi = array.array(data_types.ARRAY_INT32, [0] * len(me.loops))
+    me.loops.foreach_get("vertex_index", t_vi)
+    t_ls = [None] * len(me.polygons)
+    me.polygons.foreach_get("loop_start", t_ls)
+    for ls in t_ls:
+        t_vi[ls - 1] ^= -1
+    elem_data_single_int32_array(geom, b"PolygonVertexIndex", t_vi)
+    del t_vi
+    del t_ls
+
+    # Loop normals.
+    t_vn = array.array(data_types.ARRAY_FLOAT64, [0.0] * len(me.loops) * 3)
+    me.calc_normals_split()
+    me.loops.foreach_get("normal", t_vn)
+    lay_nor = elem_data_single_int32(geom, b"LayerElementNormal", 0)
+    elem_data_single_int32(lay_nor, b"Version", FBX_GEOMETRY_NORMAL_VERSION)
+    elem_data_single_string(lay_nor, b"Name", b"")
+    elem_data_single_string(lay_nor, b"MappingInformationType", b"ByPolygonVertex")
+    elem_data_single_string(lay_nor, b"ReferenceInformationType", b"Direct") # We could save some space with IndexToDirect here too...
+    elem_data_single_float64_array(lay_nor, b"Normals", t_vn);
+    del t_vn
+    me.free_normals_split()
+
+    # TODO: smooth, uv, material, etc.
+
+    layer = elem_data_single_int32(geom, b"Layer", 0)
+    elem_data_single_int32(layer, b"Version", FBX_GEOMETRY_LAYER_VERSION)
+    lay_nor = elem_empty(layer, b"LayerElement")
+    elem_data_single_string(lay_nor, b"Type", b"LayerElementNormal")
+    elem_data_single_int32(lay_nor, b"TypeIndex", 0)
+
+
+"""
+        ["Geometry", [152167664, "::Geometry", "Mesh"], "LSS", [
+            ["Vertices", [[1.0, 1.0, -1.0, 1.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0, 1.0, -1.0, 1.0, 0.999999, 1.0, 0.999999, -1.000001, 1.0, -1.0, -1.0, 1.0, -1.0, 1.0, 1.0]], "d", []],
+            ["PolygonVertexIndex", [[0, 1, 2, -4, 4, 7, 6, -6, 0, 4, 5, -2, 1, 5, 6, -3, 2, 6, 7, -4, 4, 0, 3, -8]], "i", []],
+            ["GeometryVersion", [124], "I", []],
+            ["LayerElementNormal", [0], "I", [
+                ["Version", [101], "I", []],
+                ["Name", [""], "S", []],
+                ["MappingInformationType", ["ByVertice"], "S", []],
+                ["ReferenceInformationType", ["Direct"], "S", []],
+                ["Normals", [[0.577349185943604, 0.577349185943604, -0.577349185943604, 0.577349185943604, -0.577349185943604, -0.577349185943604, -0.577349185943604, -0.577349185943604, -0.577349185943604, -0.577349185943604, 0.577349185943604, -0.577349185943604, 0.577349185943604, 0.577349185943604, 0.577349185943604, 0.577349185943604, -0.577349185943604, 0.577349185943604, -0.577349185943604, -0.577349185943604, 0.577349185943604, -0.577349185943604, 0.577349185943604, 0.577349185943604]], "d", []]]],
+            ["LayerElementSmoothing", [0], "I", [
+                ["Version", [102], "I", []],
+                ["Name", [""], "S", []],
+                ["MappingInformationType", ["ByPolygon"], "S", []],
+                ["ReferenceInformationType", ["Direct"], "S", []],
+                ["Smoothing", [[0, 0, 0, 0, 0, 0]], "i", []]]],
+            ["LayerElementMaterial", [0], "I", [
+                ["Version", [101], "I", []],
+                ["Name", [""], "S", []],
+                ["MappingInformationType", ["AllSame"], "S", []],
+                ["ReferenceInformationType", ["IndexToDirect"], "S", []],
+                ["Materials", [[0]], "i", []]]],
+            ["Layer", [0], "I", [
+                ["Version", [100], "I", []],
+                ["LayerElement", [], "", [
+                    ["Type", ["LayerElementNormal"], "S", []],
+                    ["TypedIndex", [0], "I", []]]],
+                ["LayerElement", [], "", [
+                    ["Type", ["LayerElementMaterial"], "S", []],
+                    ["TypedIndex", [0], "I", []]]],
+                ["LayerElement", [], "", [
+                    ["Type", ["LayerElementSmoothing"], "S", []],
+                    ["TypedIndex", [0], "I", []]]]]]]],
+"""
+
+
+
 def fbx_data_object_elements(root, obj, scene_data):
     """
     Write the Object (Model) data blocks.
     """
+    obj_type = b"Null"  # default, sort of empty...
+    if (obj.type == 'MESH'):
+        obj_type = b"Mesh"
+    elif (obj.type == 'CAMERA'):
+        obj_type = b"Camera"
     obj_key = scene_data.objects[obj]
     model = elem_data_single_int64(root, b"Model", get_fbxuid_from_key(obj_key))
     model.add_string(fbx_name_class(obj.name.encode(), b"Model"))
-    model.add_string_unicode(obj.name)  # Not sure what this third data is supposed to contain, actually...
+    model.add_string(obj_type)
 
     elem_data_single_int32(model, b"Version", FBX_MODELS_VERSION)
 
     # Object transform info.
     loc, rot, scale, matrix, matrix_rot = object_tx(obj, scene_data)
+    rot = tuple(units_convert(rot, "radian", "degree"))
 
     tmpl = scene_data.templates[b"Model"]
     # For now add only loc/rot/scale...
     props = elem_properties(model)
-    elem_props_template_set(tmpl, props, "p_lcl_translation", b"LCL Translation", loc)
-    elem_props_template_set(tmpl, props, "p_lcl_rotation", b"LCL Rotation", rot)
-    elem_props_template_set(tmpl, props, "p_lcl_scaling", b"LCL Scaling", scale)
+    elem_props_template_set(tmpl, props, "p_lcl_translation", b"Lcl Translation", loc)
+    elem_props_template_set(tmpl, props, "p_lcl_rotation", b"Lcl Rotation", rot)
+    elem_props_template_set(tmpl, props, "p_lcl_scaling", b"Lcl Scaling", scale)
 
     # Those settings would obviously need to be edited in a complete version of the exporter, may depends on
     # object type, etc.
@@ -628,7 +738,7 @@ def fbx_data_object_elements(root, obj, scene_data):
         _1, _2, obj_cam_switcher_key = scene_data.data_cameras[obj]
         cam_switcher_model = elem_data_single_int64(root, b"Model", get_fbxuid_from_key(obj_cam_switcher_key))
         cam_switcher_model.add_string(fbx_name_class(obj.name.encode() + b"_switcher", b"Model"))
-        cam_switcher_model.add_string_unicode(obj.name + "_switcher")
+        cam_switcher_model.add_string(b"CameraSwitcher")
 
         elem_data_single_int32(cam_switcher_model, b"Version", FBX_MODELS_VERSION)
 
@@ -816,7 +926,7 @@ def fbx_objects_elements(root, scene_data):
         fbx_data_camera_elements(objects, cam, scene_data)
 
     for mesh in scene_data.data_meshes:
-        pass
+        fbx_data_mesh_elements(objects, mesh, scene_data)
 
     for obj in scene_data.objects.keys():
         fbx_data_object_elements(objects, obj, scene_data)
@@ -843,6 +953,11 @@ def fbx_connections_elements(root, scene_data):
                         get_fbxuid_from_key(cam_obj_switcher_key))
         cam_obj_key = scene_data.objects[obj_cam]
         elem_connection(connections, b"OO", get_fbxuid_from_key(cam_key), get_fbxuid_from_key(cam_obj_key))
+
+    for obj, obj_key in scene_data.objects.items():
+        if obj.type == 'MESH':
+            mesh_key = scene_data.data_meshes[obj.data]
+            elem_connection(connections, b"OO", get_fbxuid_from_key(mesh_key), get_fbxuid_from_key(obj_key))
 
 
 def fbx_takes_elements(root, scene_data):
