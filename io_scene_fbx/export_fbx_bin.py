@@ -341,12 +341,12 @@ def fbx_template_generate(root, fbx_template):
             elem_props_set(props, ptype, name, value)
 
 
-def fbx_template_def_globalsettings(override_defaults={}, nbr_users=0):
+def fbx_template_def_globalsettings(gmat, gscale, override_defaults={}, nbr_users=0):
     props = override_defaults  # No properties, by default.
     return FBXTemplate(b"GlobalSettings", b"", props, nbr_users)
 
 
-def fbx_template_def_model(override_defaults={}, nbr_users=0):
+def fbx_template_def_model(gmat, gscale, override_defaults={}, nbr_users=0):
     props = {
         b"QuaternionInterpolate": (False, "p_bool"),
         b"RotationOffset": ((0.0, 0.0, 0.0), "p_vector_3d"),
@@ -381,8 +381,8 @@ def fbx_template_def_model(override_defaults={}, nbr_users=0):
         b"RotationMaxZ": (False, "p_bool"),
         b"InheritType": (0, "p_enum"),
         b"ScalingActive": (False, "p_bool"),
-        b"ScalingMin": ((1.0, 1.0, 1.0), "p_vector_3d"),
-        b"ScalingMax": ((1.0, 1.0, 1.0), "p_vector_3d"),
+        b"ScalingMin": (Vector((1.0, 1.0, 1.0)) * gscale, "p_vector_3d"),
+        b"ScalingMax": (Vector((1.0, 1.0, 1.0)) * gscale, "p_vector_3d"),
         b"ScalingMinX": (False, "p_bool"),
         b"ScalingMinY": (False, "p_bool"),
         b"ScalingMinZ": (False, "p_bool"),
@@ -391,7 +391,7 @@ def fbx_template_def_model(override_defaults={}, nbr_users=0):
         b"ScalingMaxZ": (False, "p_bool"),
         b"GeometricTranslation": ((0.0, 0.0, 0.0), "p_vector_3d"),
         b"GeometricRotation": ((0.0, 0.0, 0.0), "p_vector_3d"),
-        b"GeometricScaling": ((1.0, 1.0, 1.0), "p_vector_3d"),
+        b"GeometricScaling": (Vector((1.0, 1.0, 1.0)) * gscale, "p_vector_3d"),
         b"MinDampRangeX": (0.0, "p_number"),
         b"MinDampRangeY": (0.0, "p_number"),
         b"MinDampRangeZ": (0.0, "p_number"),
@@ -416,21 +416,21 @@ def fbx_template_def_model(override_defaults={}, nbr_users=0):
         b"LODBox": (False, "p_bool"),
         b"Lcl Translation": ((0.0, 0.0, 0.0), "p_lcl_translation"),
         b"Lcl Rotation": ((0.0, 0.0, 0.0), "p_lcl_rotation"),
-        b"Lcl Scaling": ((1.0, 1.0, 1.0), "p_lcl_scaling"),
+        b"Lcl Scaling": (Vector((1.0, 1.0, 1.0)) * gscale, "p_lcl_scaling"),
         b"Visibility": (1.0, "p_visibility"),
     }
     props.update(override_defaults)
     return FBXTemplate(b"Model", b"KFbxNode", props, nbr_users)
 
 
-def fbx_template_def_nodeattribute_light(override_defaults={}, nbr_users=0):
+def fbx_template_def_light(gmat, gscale, override_defaults={}, nbr_users=0):
     props = {
         b"LightType": (0, "p_enum"),  # Point light.
         b"CastLight": (True, "p_bool"),
         b"Color": ((1.0, 1.0, 1.0), "p_color_rgb"),
         b"Intensity": (100.0, "p_number"),  # Times 100 compared to Blender values...
         b"DecayType": (2, "p_enum"),  # Quadratic.
-        b"DecayStart": (30.0, "p_number"),
+        b"DecayStart": (30.0 * gscale, "p_number"),
         b"CastShadows": (True, "p_bool"),
         b"ShadowColor": ((0.0, 0.0, 0.0), "p_color_rgb"),
         b"AreaLightShape": (0, "p_enum"),  # Rectangle.
@@ -439,12 +439,12 @@ def fbx_template_def_nodeattribute_light(override_defaults={}, nbr_users=0):
     return FBXTemplate(b"NodeAttribute", b"KFbxLight", props, nbr_users)
 
 
-def fbx_template_def_nodeattribute_camera(override_defaults={}, nbr_users=0):
+def fbx_template_def_camera(gmat, gscale, override_defaults={}, nbr_users=0):
     props = override_defaults
     return FBXTemplate(b"NodeAttribute", b"KFbxCamera", props, nbr_users)
 
 
-def fbx_template_def_nodeattribute_cameraswitcher(override_defaults={}, nbr_users=0):
+def fbx_template_def_cameraswitcher(gmat, gscale, override_defaults={}, nbr_users=0):
     props = {
         b"Color": ((0.8, 0.8, 0.8), "p_color_rgb"),
         b"Camera Index": (1, "p_integer"),
@@ -453,12 +453,7 @@ def fbx_template_def_nodeattribute_cameraswitcher(override_defaults={}, nbr_user
     return FBXTemplate(b"NodeAttribute", b"KFbxCameraSwitcher", props, nbr_users)
 
 
-def fbx_template_def_nodeattribute_light(override_defaults={}, nbr_users=0):
-    props = override_defaults
-    return FBXTemplate(b"NodeAttribute", b"KFbxLight", props, nbr_users)
-
-
-def fbx_template_def_geometry(override_defaults={}, nbr_users=0):
+def fbx_template_def_geometry(gmat, gscale, override_defaults={}, nbr_users=0):
     props = {
         b"Color": ((0.8, 0.8, 0.8), "p_color_rgb"),
         b"BBoxMin": ((0.0, 0.0, 0.0), "p_vector_3d"),
@@ -468,7 +463,7 @@ def fbx_template_def_geometry(override_defaults={}, nbr_users=0):
     return FBXTemplate(b"Geometry", b"KFbxMesh", props, nbr_users)
 
 
-def fbx_template_def_material(override_defaults={}, nbr_users=0):
+def fbx_template_def_material(gmat, gscale, override_defaults={}, nbr_users=0):
     props = {
         b"ShadingModel": ("Lambert", "p_string"),
         b"MultiLayer": (False, "p_bool"),
@@ -490,7 +485,7 @@ def fbx_template_def_material(override_defaults={}, nbr_users=0):
     return FBXTemplate(b"Material", b"KFbxSurfaceLambert", props, nbr_users)
 
 
-def fbx_template_def_pose(override_defaults={}, nbr_users=0):
+def fbx_template_def_pose(gmat, gscale, override_defaults={}, nbr_users=0):
     props = override_defaults  # No properties, by default.
     return FBXTemplate(b"Pose", b"", props, nbr_users)
 
@@ -550,6 +545,9 @@ def fbx_data_lamp_elements(root, lamp, scene_data):
     """
     Write the Lamp data block.
     """
+    gscale = scene_data.global_scale
+    gmat = scene_data.global_matrix
+
     lamp_key = scene_data.data_lamps[lamp]
     do_light = True
     decay_type = FBX_LIGHT_DECAY_TYPES['CONSTANT']
@@ -568,14 +566,14 @@ def fbx_data_lamp_elements(root, lamp, scene_data):
 
     elem_data_single_int32(light, b"GeometryVersion", FBX_GEOMETRY_VERSION)  # Sic...
 
-    tmpl = scene_data.templates[b"NodeAttribute::Light"]
+    tmpl = scene_data.templates[b"Light"]
     props = elem_properties(light)
     elem_props_template_set(tmpl, props, "p_enum", b"LightType", FBX_LIGHT_TYPES[lamp.type])
     elem_props_template_set(tmpl, props, "p_bool", b"CastLight", do_light)
     elem_props_template_set(tmpl, props, "p_color_rgb", b"Color", lamp.color)
     elem_props_template_set(tmpl, props, "p_number", b"Intensity", lamp.energy * 100.0)
     elem_props_template_set(tmpl, props, "p_enum", b"DecayType", decay_type)
-    elem_props_template_set(tmpl, props, "p_number", b"DecayStart", lamp.distance)
+    elem_props_template_set(tmpl, props, "p_number", b"DecayStart", lamp.distance * gscale)
     elem_props_template_set(tmpl, props, "p_bool", b"CastShadows", do_shadow)
     elem_props_template_set(tmpl, props, "p_color_rgb", b"ShadowColor", shadow_color)
     if lamp.type in {'SPOT'}:
@@ -588,6 +586,9 @@ def fbx_data_camera_elements(root, cam_obj, scene_data):
     """
     Write the Camera and CameraSwitcher data blocks.
     """
+    gscale = scene_data.global_scale
+    gmat = scene_data.global_matrix
+
     cam_data = cam_obj.data
     cam_key, cam_switcher_key, cam_switcher_object_key = scene_data.data_cameras[cam_obj]
 
@@ -596,7 +597,7 @@ def fbx_data_camera_elements(root, cam_obj, scene_data):
     cam_switcher.add_string(fbx_name_class(cam_data.name.encode() + b"_switcher", b"NodeAttribute"))
     cam_switcher.add_string(b"CameraSwitcher")
 
-    tmpl = scene_data.templates[b"NodeAttribute::CameraSwitcher"]
+    tmpl = scene_data.templates[b"CameraSwitcher"]
     props = elem_properties(cam_switcher)
     elem_props_template_set(tmpl, props, "p_integer", b"Camera Index", 100)
 
@@ -629,7 +630,7 @@ def fbx_data_camera_elements(root, cam_obj, scene_data):
     cam.add_string(fbx_name_class(cam_data.name.encode(), b"NodeAttribute"))
     cam.add_string(b"Camera")
 
-    tmpl = scene_data.templates[b"NodeAttribute::Camera"]
+    tmpl = scene_data.templates[b"Camera"]
     props = elem_properties(cam)
     elem_props_template_set(tmpl, props, "p_vector_3d", b"Position", loc)
     elem_props_template_set(tmpl, props, "p_vector_3d", b"UpVector", up)
@@ -653,10 +654,10 @@ def fbx_data_camera_elements(root, cam_obj, scene_data):
     elem_props_template_set(tmpl, props, "p_number", b"FocalLength", cam_data.lens)
     elem_props_template_set(tmpl, props, "p_number", b"SafeAreaAspectRatio", aspect)
 
-    elem_props_template_set(tmpl, props, "p_number", b"NearPlane", cam_data.clip_start * scene_data.global_scale)
-    elem_props_template_set(tmpl, props, "p_number", b"FarPlane", cam_data.clip_end * scene_data.global_scale)
+    elem_props_template_set(tmpl, props, "p_number", b"NearPlane", cam_data.clip_start * gscale)
+    elem_props_template_set(tmpl, props, "p_number", b"FarPlane", cam_data.clip_end * gscale)
     elem_props_template_set(tmpl, props, "p_enum", b"BackPlaneDistanceMode", 1)  # RelativeToCamera.
-    elem_props_template_set(tmpl, props, "p_number", b"BackPlaneDistance", cam_data.clip_end * scene_data.global_scale)
+    elem_props_template_set(tmpl, props, "p_number", b"BackPlaneDistance", cam_data.clip_end * gscale)
 
     elem_data_single_string(cam, b"TypeFlags", b"Camera")
     elem_data_single_int32(cam, b"GeometryVersion", 124)  # Sic...
@@ -673,6 +674,8 @@ def fbx_data_mesh_elements(root, me, scene_data):
     """
     Write the Mesh (Geometry) data block.
     """
+    # No gscale/gmat here, all data are supposed to be in object space.
+
     me_key = scene_data.data_meshes[me]
     geom = elem_data_single_int64(root, b"Geometry", get_fbxuid_from_key(me_key))
     geom.add_string(fbx_name_class(me.name.encode(), b"Geometry"))
@@ -762,6 +765,9 @@ def fbx_data_object_elements(root, obj, scene_data):
     """
     Write the Object (Model) data blocks.
     """
+    gscale = scene_data.global_scale
+    gmat = scene_data.global_matrix
+
     obj_type = b"Null"  # default, sort of empty...
     if (obj.type == 'MESH'):
         obj_type = b"Mesh"
@@ -839,12 +845,12 @@ FBXData = namedtuple("FBXData", (
 ))
 
 
-def fbx_data_from_scene(scene, object_types, global_matrix, global_scale):
+def fbx_data_from_scene(scene, object_types, gmat, gscale):
     """
     Do some pre-processing over scene's data...
     """
     templates = {
-        b"GlobalSettings": fbx_template_def_globalsettings(nbr_users=1),
+        b"GlobalSettings": fbx_template_def_globalsettings(gmat, gscale, nbr_users=1),
     }
 
     # This is rather simple for now, maybe we could end generating templates with most-used values
@@ -857,23 +863,23 @@ def fbx_data_from_scene(scene, object_types, global_matrix, global_scale):
 
     if objects:
         # We use len(object) + len(data_cameras) because of the CameraSwitcher objects...
-        templates[b"Model"] = fbx_template_def_model(nbr_users=len(objects) + len(data_cameras))
+        templates[b"Model"] = fbx_template_def_model(gmat, gscale, nbr_users=len(objects) + len(data_cameras))
 
     if data_lamps:
-        templates[b"NodeAttribute::Light"] = fbx_template_def_nodeattribute_light(nbr_users=len(data_lamps))
+        templates[b"Light"] = fbx_template_def_light(gmat, gscale, nbr_users=len(data_lamps))
 
     if data_cameras:
         nbr = len(data_cameras)
-        templates[b"NodeAttribute::Camera"] = fbx_template_def_nodeattribute_camera(nbr_users=nbr)
-        templates[b"NodeAttribute::CameraSwitcher"] = fbx_template_def_nodeattribute_cameraswitcher(nbr_users=nbr)
+        templates[b"Camera"] = fbx_template_def_camera(gmat, gscale, nbr_users=nbr)
+        templates[b"CameraSwitcher"] = fbx_template_def_cameraswitcher(gmat, gscale, nbr_users=nbr)
 
     if data_meshes:
-        templates[b"Geometry"] = fbx_template_def_geometry(nbr_users=len(data_meshes))
+        templates[b"Geometry"] = fbx_template_def_geometry(gmat, gscale, nbr_users=len(data_meshes))
 
     templates_users = sum(tmpl.nbr_users for tmpl in templates.values())
     return FBXData(
         templates, templates_users,
-        global_matrix, global_scale,
+        gmat, gscale,
         scene, objects,
         data_lamps, data_cameras, data_meshes,
     )
