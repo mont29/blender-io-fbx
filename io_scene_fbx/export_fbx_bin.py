@@ -52,6 +52,23 @@ FBX_GEOMETRY_LAYER_VERSION = 100
 FBX_NAME_CLASS_SEP = b"\x00\x01"
 
 
+# Lamps.
+FBX_LIGHT_TYPES = {
+    'POINT': 0,  # Point.
+    'SUN': 1,    # Directional.
+    'SPOT': 2,   # Spot.
+    'HEMI': 1,   # Directional.
+    'AREA': 3,   # Area.
+}
+FBX_LIGHT_DECAY_TYPES = {
+    'CONSTANT': 0,                   # None.
+    'INVERSE_LINEAR': 1,             # Linear.
+    'INVERSE_SQUARE': 2,             # Quadratic.
+    'CUSTOM_CURVE': 2,               # Quadratic.
+    'LINEAR_QUADRATIC_WEIGHTED': 2,  # Quadratic.
+}
+
+
 # Default global matrix.
 MTX_GLOB = Matrix()
 # Used for camera and lamp rotations.
@@ -406,6 +423,22 @@ def fbx_template_def_model(override_defaults={}, nbr_users=0):
     return FBXTemplate(b"Model", b"KFbxNode", props, nbr_users)
 
 
+def fbx_template_def_nodeattribute_light(override_defaults={}, nbr_users=0):
+    props = {
+        b"LightType": (0, "p_enum"),  # Point light.
+        b"CastLight": (True, "p_bool"),
+        b"Color": ((1.0, 1.0, 1.0), "p_color_rgb"),
+        b"Intensity": (100.0, "p_number"),  # Times 100 compared to Blender values...
+        b"DecayType": (2, "p_enum"),  # Quadratic.
+        b"DecayStart": (30.0, "p_number"),
+        b"CastShadows": (True, "p_bool"),
+        b"ShadowColor": ((0.0, 0.0, 0.0), "p_color_rgb"),
+        b"AreaLightShape": (0, "p_enum"),  # Rectangle.
+    }
+    props.update(override_defaults)
+    return FBXTemplate(b"NodeAttribute", b"KFbxLight", props, nbr_users)
+
+
 def fbx_template_def_nodeattribute_camera(override_defaults={}, nbr_users=0):
     props = override_defaults
     return FBXTemplate(b"NodeAttribute", b"KFbxCamera", props, nbr_users)
@@ -513,6 +546,44 @@ def fbx_name_class(name, cls):
     return FBX_NAME_CLASS_SEP.join((name, cls))
 
 
+def fbx_data_lamp_elements(root, lamp, scene_data):
+    """
+    Write the Lamp data block.
+    """
+    lamp_key = scene_data.data_lamps[lamp]
+    do_light = True
+    decay_type = FBX_LIGHT_DECAY_TYPES['CONSTANT']
+    do_shadow = False
+    shadow_color = Vector((0.0, 0.0, 0.0))
+    if lamp.type not in {'HEMI'}:
+        if lamp.type not in {'SUN'}:
+            decay_type = FBX_LIGHT_DECAY_TYPES[lamp.falloff_type]
+        do_light = (not lamp.use_only_shadow) and (lamp.use_specular or lamp.use_diffuse)
+        do_shadow = lamp.shadow_method not in {'NOSHADOW'}
+        shadow_color = lamp.shadow_color
+
+    light = elem_data_single_int64(root, b"NodeAttribute", get_fbxuid_from_key(lamp_key))
+    light.add_string(fbx_name_class(lamp.name.encode(), b"NodeAttribute"))
+    light.add_string(b"Light")
+
+    elem_data_single_int32(light, b"GeometryVersion", FBX_GEOMETRY_VERSION)  # Sic...
+
+    tmpl = scene_data.templates[b"NodeAttribute::Light"]
+    props = elem_properties(light)
+    elem_props_template_set(tmpl, props, "p_enum", b"LightType", FBX_LIGHT_TYPES[lamp.type])
+    elem_props_template_set(tmpl, props, "p_bool", b"CastLight", do_light)
+    elem_props_template_set(tmpl, props, "p_color_rgb", b"Color", lamp.color)
+    elem_props_template_set(tmpl, props, "p_number", b"Intensity", lamp.energy * 100.0)
+    elem_props_template_set(tmpl, props, "p_enum", b"DecayType", decay_type)
+    elem_props_template_set(tmpl, props, "p_number", b"DecayStart", lamp.distance)
+    elem_props_template_set(tmpl, props, "p_bool", b"CastShadows", do_shadow)
+    elem_props_template_set(tmpl, props, "p_color_rgb", b"ShadowColor", shadow_color)
+    if lamp.type in {'SPOT'}:
+        elem_props_template_set(tmpl, props, "p_number", b"OuterAngle", math.degrees(lamp.spot_size))
+        elem_props_template_set(tmpl, props, "p_number", b"InnerAngle",
+                                math.degrees(lamp.spot_size * (1.0 - lamp.spot_blend)))
+    
+
 def fbx_data_camera_elements(root, cam_obj, scene_data):
     """
     Write the Camera and CameraSwitcher data blocks.
@@ -588,7 +659,7 @@ def fbx_data_camera_elements(root, cam_obj, scene_data):
     elem_props_template_set(tmpl, props, "p_number", b"BackPlaneDistance", cam_data.clip_end * scene_data.global_scale)
 
     elem_data_single_string(cam, b"TypeFlags", b"Camera")
-    elem_data_single_int32(cam, b"GeometryVersion", 124)
+    elem_data_single_int32(cam, b"GeometryVersion", 124)  # Sic...
     elem_data_vec_float64(cam, b"Position", loc)
     elem_data_vec_float64(cam, b"Up", up)
     elem_data_vec_float64(cam, b"LookAt", to)
@@ -605,7 +676,7 @@ def fbx_data_mesh_elements(root, me, scene_data):
     me_key = scene_data.data_meshes[me]
     geom = elem_data_single_int64(root, b"Geometry", get_fbxuid_from_key(me_key))
     geom.add_string(fbx_name_class(me.name.encode(), b"Geometry"))
-    geom.add_string(b"Mesh")  # Looks like a sub-type?
+    geom.add_string(b"Mesh")
 
     elem_data_single_int32(geom, b"GeometryVersion", FBX_GEOMETRY_VERSION)
 
@@ -694,6 +765,8 @@ def fbx_data_object_elements(root, obj, scene_data):
     obj_type = b"Null"  # default, sort of empty...
     if (obj.type == 'MESH'):
         obj_type = b"Mesh"
+    elif (obj.type == 'LAMP'):
+        obj_type = b"Light"
     elif (obj.type == 'CAMERA'):
         obj_type = b"Camera"
     obj_key = scene_data.objects[obj]
@@ -762,7 +835,7 @@ FBXData = namedtuple("FBXData", (
     "templates", "templates_users",
     "global_matrix", "global_scale",
     "scene", "objects", 
-    "data_cameras", "data_meshes",
+    "data_lamps", "data_cameras", "data_meshes",
 ))
 
 
@@ -777,6 +850,7 @@ def fbx_data_from_scene(scene, object_types, global_matrix, global_scale):
     # This is rather simple for now, maybe we could end generating templates with most-used values
     # instead of default ones?
     objects = {obj: get_blenderID_key(obj) for obj in scene.objects if obj.type in object_types}
+    data_lamps = {obj.data: get_blenderID_key(obj.data) for obj in objects if obj.type == 'LAMP'}
     # Unfortunately, FBX camera data contains object-level data (like position, orientation, etc.)...
     data_cameras = {obj: get_blender_camera_keys(obj.data) for obj in objects if obj.type == 'CAMERA'}
     data_meshes = {obj.data: get_blenderID_key(obj.data) for obj in objects if obj.type == 'MESH'}
@@ -784,6 +858,9 @@ def fbx_data_from_scene(scene, object_types, global_matrix, global_scale):
     if objects:
         # We use len(object) + len(data_cameras) because of the CameraSwitcher objects...
         templates[b"Model"] = fbx_template_def_model(nbr_users=len(objects) + len(data_cameras))
+
+    if data_lamps:
+        templates[b"NodeAttribute::Light"] = fbx_template_def_nodeattribute_light(nbr_users=len(data_lamps))
 
     if data_cameras:
         nbr = len(data_cameras)
@@ -798,7 +875,7 @@ def fbx_data_from_scene(scene, object_types, global_matrix, global_scale):
         templates, templates_users,
         global_matrix, global_scale,
         scene, objects,
-        data_cameras, data_meshes,
+        data_lamps, data_cameras, data_meshes,
     )
 
 
@@ -922,6 +999,9 @@ def fbx_objects_elements(root, scene_data):
     """
     objects = elem_empty(root, b"Objects")
 
+    for lamp in scene_data.data_lamps.keys():
+        fbx_data_lamp_elements(objects, lamp, scene_data)
+
     for cam in scene_data.data_cameras.keys():
         fbx_data_camera_elements(objects, cam, scene_data)
 
@@ -955,7 +1035,10 @@ def fbx_connections_elements(root, scene_data):
         elem_connection(connections, b"OO", get_fbxuid_from_key(cam_key), get_fbxuid_from_key(cam_obj_key))
 
     for obj, obj_key in scene_data.objects.items():
-        if obj.type == 'MESH':
+        if obj.type == 'LAMP':
+            lamp_key = scene_data.data_lamps[obj.data]
+            elem_connection(connections, b"OO", get_fbxuid_from_key(lamp_key), get_fbxuid_from_key(obj_key))
+        elif obj.type == 'MESH':
             mesh_key = scene_data.data_meshes[obj.data]
             elem_connection(connections, b"OO", get_fbxuid_from_key(mesh_key), get_fbxuid_from_key(obj_key))
 
