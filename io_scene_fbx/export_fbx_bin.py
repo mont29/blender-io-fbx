@@ -515,7 +515,7 @@ def object_tx(ob, scene_data):
         matrix = ob.matrix_local
     else:
         # Only apply global transform (global space) to 'root' objects!
-        matrix = scene_data.global_matrix * matrix
+        matrix = scene_data.settings.global_matrix * matrix
 
     loc, rot, scale = matrix.decompose()
     matrix_rot = rot.to_matrix()
@@ -556,8 +556,8 @@ def fbx_data_lamp_elements(root, lamp, scene_data):
     """
     Write the Lamp data block.
     """
-    gscale = scene_data.global_scale
-    gmat = scene_data.global_matrix
+    gscale = scene_data.settings.global_scale
+    gmat = scene_data.settings.global_matrix
 
     lamp_key = scene_data.data_lamps[lamp]
     do_light = True
@@ -597,8 +597,8 @@ def fbx_data_camera_elements(root, cam_obj, scene_data):
     """
     Write the Camera and CameraSwitcher data blocks.
     """
-    gscale = scene_data.global_scale
-    gmat = scene_data.global_matrix
+    gscale = scene_data.settings.global_scale
+    gmat = scene_data.settings.global_matrix
 
     cam_data = cam_obj.data
     cam_key, cam_switcher_key, cam_switcher_object_key = scene_data.data_cameras[cam_obj]
@@ -712,6 +712,8 @@ def fbx_data_mesh_elements(root, me, scene_data):
     del t_vi
     del t_ls
 
+    # TODO: edges.
+
     # Loop normals.
     t_vn = array.array(data_types.ARRAY_FLOAT64, [0.0] * len(me.loops) * 3)
     me.calc_normals_split()
@@ -724,6 +726,37 @@ def fbx_data_mesh_elements(root, me, scene_data):
     elem_data_single_float64_array(lay_nor, b"Normals", t_vn);
     del t_vn
     me.free_normals_split()
+
+    """
+    # Smoothing.
+    if mesh_smooth_type == 'FACE':
+        t_ps = [None] * len(me.polygons)
+        me.polygons.foreach_get("use_smooth", t_ps)
+        fw('\n\t\tLayerElementSmoothing: 0 {'
+           '\n\t\t\tVersion: 102'
+           '\n\t\t\tName: ""'
+           '\n\t\t\tMappingInformationType: "ByPolygon"'
+           '\n\t\t\tReferenceInformationType: "Direct"'
+           '\n\t\t\tSmoothing: ')
+        fw(',\n\t\t\t           '.join(','.join('%d' % b for b in chunk) for chunk in grouper_exact(t_ps, _nchunk)))
+        fw('\n\t\t}')
+        del t_ps
+    elif mesh_smooth_type == 'EDGE':
+        # Write Edge Smoothing
+        t_es = [None] * len(me.edges)
+        me.edges.foreach_get("use_edge_sharp", t_es)
+        fw('\n\t\tLayerElementSmoothing: 0 {'
+           '\n\t\t\tVersion: 101'
+           '\n\t\t\tName: ""'
+           '\n\t\t\tMappingInformationType: "ByEdge"'
+           '\n\t\t\tReferenceInformationType: "Direct"'
+           '\n\t\t\tSmoothing: ')
+        fw(',\n\t\t\t           '
+           ''.join(','.join('%d' % (not b) for b in chunk) for chunk in grouper_exact(t_es, _nchunk)))
+        fw('\n\t\t}')
+        del t_es
+    """
+
 
     # TODO: smooth, uv, material, etc.
 
@@ -776,8 +809,8 @@ def fbx_data_object_elements(root, obj, scene_data):
     """
     Write the Object (Model) data blocks.
     """
-    gscale = scene_data.global_scale
-    gmat = scene_data.global_matrix
+    gscale = scene_data.settings.global_scale
+    gmat = scene_data.settings.global_matrix
 
     obj_type = b"Null"  # default, sort of empty...
     if (obj.type == 'MESH'):
@@ -850,23 +883,26 @@ def fbx_data_object_elements(root, obj, scene_data):
 #     * takes.
 FBXData = namedtuple("FBXData", (
     "templates", "templates_users",
-    "global_matrix", "global_scale",
-    "scene", "objects", 
+    "settings", "scene", "objects", 
     "data_lamps", "data_cameras", "data_meshes",
 ))
 
 
-def fbx_data_from_scene(scene, object_types, gmat, gscale):
+def fbx_data_from_scene(scene, settings):
     """
     Do some pre-processing over scene's data...
     """
+    gmat = settings.global_matrix
+    gscale = settings.global_scale
+    objtypes = settings.object_types
+
     templates = {
         b"GlobalSettings": fbx_template_def_globalsettings(gmat, gscale, nbr_users=1),
     }
 
     # This is rather simple for now, maybe we could end generating templates with most-used values
     # instead of default ones?
-    objects = {obj: get_blenderID_key(obj) for obj in scene.objects if obj.type in object_types}
+    objects = {obj: get_blenderID_key(obj) for obj in scene.objects if obj.type in objtypes}
     data_lamps = {obj.data: get_blenderID_key(obj.data) for obj in objects if obj.type == 'LAMP'}
     # Unfortunately, FBX camera data contains object-level data (like position, orientation, etc.)...
     data_cameras = {obj: get_blender_camera_keys(obj.data) for obj in objects if obj.type == 'CAMERA'}
@@ -890,15 +926,14 @@ def fbx_data_from_scene(scene, object_types, gmat, gscale):
     templates_users = sum(tmpl.nbr_users for tmpl in templates.values())
     return FBXData(
         templates, templates_users,
-        gmat, gscale,
-        scene, objects,
+        settings, scene, objects,
         data_lamps, data_cameras, data_meshes,
     )
 
 
 ##### Top-level FBX elements generators. #####
 
-def fbx_header_elements(root, time=None):
+def fbx_header_elements(root, scene_data, time=None):
     """
     Write boiling code of FBX root.
     time is expected to be a datetime.datetime object, or None (using now() in this case).
@@ -965,12 +1000,14 @@ def fbx_header_elements(root, time=None):
     ##### End of GlobalSettings element.
 
 
-def fbx_documents_elements(root, name=""):
+def fbx_documents_elements(root, scene_data):
     """
     Write 'Document' part of FBX root.
     Seems like FBX support multiple documents, but until I find examples of such, we'll stick to single doc!
     time is expected to be a datetime.datetime object, or None (using now() in this case).
     """
+    name = scene_data.scene.name
+
     ##### Start of Documents element.
     docs = elem_empty(root, b"Documents")
 
@@ -990,7 +1027,7 @@ def fbx_documents_elements(root, name=""):
     elem_data_single_int64(doc, b"RootNode", 0)
 
 
-def fbx_references_elements(root):
+def fbx_references_elements(root, scene_data):
     """
     Have no idea what references are in FBX currently... Just writing empty element.
     """
@@ -1068,6 +1105,12 @@ def fbx_takes_elements(root, scene_data):
 
 
 ##### "Main" functions. #####
+FBXSettings = namedtuple("FBXSettings", (
+    "global_matrix", "global_scale", "context_objects", "object_types", "use_mesh_modifiers",
+    "mesh_smooth_type", "use_mesh_edges", "use_armature_deform_only",
+    "use_anim", "use_anim_optimize", "anim_optimize_precision", "use_anim_action_all", "use_default_take",
+    "use_metadata", "path_mode",
+))
 
 # This func can be called with just the filepath
 def save_single(operator, scene, filepath="",
@@ -1093,12 +1136,19 @@ def save_single(operator, scene, filepath="",
         object_types = {'EMPTY', 'CAMERA', 'LAMP', 'MESH'}
         #object_types = {'EMPTY', 'CAMERA', 'LAMP', 'ARMATURE', 'MESH'}
 
+    global_scale = global_matrix.median_scale
+
+    settings = FBXSettings(
+        global_matrix, global_scale, context_objects, object_types, use_mesh_modifiers,
+        mesh_smooth_type, use_mesh_edges, use_armature_deform_only,
+        use_anim, use_anim_optimize, anim_optimize_precision, use_anim_action_all, use_default_take,
+        use_metadata, path_mode,
+    )
+
     import bpy_extras.io_utils
 
     print('\nFBX export starting... %r' % filepath)
     start_time = time.process_time()
-
-    global_scale = global_matrix.median_scale
 
     # Use this for working out paths relative to the export location
     base_src = os.path.dirname(bpy.data.filepath)
@@ -1108,16 +1158,16 @@ def save_single(operator, scene, filepath="",
     copy_set = set()
 
     # Generate some data about exported scene...
-    scene_data = fbx_data_from_scene(scene, object_types, global_matrix, global_scale)
+    scene_data = fbx_data_from_scene(scene, settings)
 
     root = elem_empty(None, b"")  # Root element has no id, as it is not saved per se!
 
     # Mostly FBXHeaderExtension and GlobalSettings.
-    fbx_header_elements(root)
+    fbx_header_elements(root, scene_data)
 
     # Documents and References are pretty much void currently.
-    fbx_documents_elements(root, scene.name)
-    fbx_references_elements(root)
+    fbx_documents_elements(root, scene_data)
+    fbx_references_elements(root, scene_data)
 
     # Templates definitions.
     fbx_definitions_elements(root, scene_data)
