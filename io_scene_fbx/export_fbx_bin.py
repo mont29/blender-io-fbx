@@ -686,6 +686,7 @@ def fbx_data_mesh_elements(root, me, scene_data):
     Write the Mesh (Geometry) data block.
     """
     # No gscale/gmat here, all data are supposed to be in object space.
+    smooth_type = scene_data.settings.mesh_smooth_type
 
     me_key = scene_data.data_meshes[me]
     geom = elem_data_single_int64(root, b"Geometry", get_fbxuid_from_key(me_key))
@@ -727,44 +728,41 @@ def fbx_data_mesh_elements(root, me, scene_data):
     del t_vn
     me.free_normals_split()
 
-    """
     # Smoothing.
-    if mesh_smooth_type == 'FACE':
-        t_ps = [None] * len(me.polygons)
-        me.polygons.foreach_get("use_smooth", t_ps)
-        fw('\n\t\tLayerElementSmoothing: 0 {'
-           '\n\t\t\tVersion: 102'
-           '\n\t\t\tName: ""'
-           '\n\t\t\tMappingInformationType: "ByPolygon"'
-           '\n\t\t\tReferenceInformationType: "Direct"'
-           '\n\t\t\tSmoothing: ')
-        fw(',\n\t\t\t           '.join(','.join('%d' % b for b in chunk) for chunk in grouper_exact(t_ps, _nchunk)))
-        fw('\n\t\t}')
+    if smooth_type in {'FACE', 'EDGE'}:
+        t_ps = None
+        _map = b""
+        if smooth_type == 'FACE':
+            t_ps = array.array(data_types.ARRAY_INT32, [0] * len(me.polygons))
+            me.polygons.foreach_get("use_smooth", t_ps)
+            _map = b"ByPolygon"
+        else:  # EDGE
+            # Write Edge Smoothing
+            # XXX Shouldn't this be also dependent on use_mesh_edges?
+            t_ps = array.array(data_types.ARRAY_INT32, [0] * len(me.edges))
+            me.edges.foreach_get("use_edge_sharp", t_ps)
+            _map = b"ByEdge"
+        lay_smooth = elem_data_single_int32(geom, b"LayerElementSmoothing", 0)
+        elem_data_single_int32(lay_smooth, b"Version", FBX_GEOMETRY_SMOOTHING_VERSION)
+        elem_data_single_string(lay_smooth, b"Name", b"")
+        elem_data_single_string(lay_smooth, b"MappingInformationType", _map)
+        elem_data_single_string(lay_smooth, b"ReferenceInformationType", b"Direct")
+        elem_data_single_int32_array(lay_smooth, b"Smoothing", t_ps);  # Sight, int32 for bool...
         del t_ps
-    elif mesh_smooth_type == 'EDGE':
-        # Write Edge Smoothing
-        t_es = [None] * len(me.edges)
-        me.edges.foreach_get("use_edge_sharp", t_es)
-        fw('\n\t\tLayerElementSmoothing: 0 {'
-           '\n\t\t\tVersion: 101'
-           '\n\t\t\tName: ""'
-           '\n\t\t\tMappingInformationType: "ByEdge"'
-           '\n\t\t\tReferenceInformationType: "Direct"'
-           '\n\t\t\tSmoothing: ')
-        fw(',\n\t\t\t           '
-           ''.join(','.join('%d' % (not b) for b in chunk) for chunk in grouper_exact(t_es, _nchunk)))
-        fw('\n\t\t}')
-        del t_es
-    """
+        del _map
 
 
-    # TODO: smooth, uv, material, etc.
+    # TODO: uv, material, etc.
 
     layer = elem_data_single_int32(geom, b"Layer", 0)
     elem_data_single_int32(layer, b"Version", FBX_GEOMETRY_LAYER_VERSION)
     lay_nor = elem_empty(layer, b"LayerElement")
     elem_data_single_string(lay_nor, b"Type", b"LayerElementNormal")
     elem_data_single_int32(lay_nor, b"TypeIndex", 0)
+    if smooth_type in {'FACE', 'EDGE'}:
+        lay_smooth = elem_empty(layer, b"LayerElement")
+        elem_data_single_string(lay_smooth, b"Type", b"LayerElementSmoothing")
+        elem_data_single_int32(lay_smooth, b"TypeIndex", 0)
 
 
 """
@@ -883,7 +881,7 @@ def fbx_data_object_elements(root, obj, scene_data):
 #     * takes.
 FBXData = namedtuple("FBXData", (
     "templates", "templates_users",
-    "settings", "scene", "objects", 
+    "settings", "scene", "objects",
     "data_lamps", "data_cameras", "data_meshes",
 ))
 
