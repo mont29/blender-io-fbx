@@ -29,6 +29,8 @@ import time
 
 import collections
 from collections import namedtuple
+import itertools
+from itertools import zip_longest
 
 import bpy
 from mathutils import Vector, Matrix
@@ -46,6 +48,7 @@ FBX_MODELS_VERSION = 232
 FBX_GEOMETRY_VERSION = 124
 FBX_GEOMETRY_NORMAL_VERSION = 101
 FBX_GEOMETRY_SMOOTHING_VERSION = 102
+FBX_GEOMETRY_VCOLOR_VERSION = 101
 FBX_GEOMETRY_MATERIAL_VERSION = 101
 FBX_GEOMETRY_LAYER_VERSION = 100
 
@@ -751,8 +754,105 @@ def fbx_data_mesh_elements(root, me, scene_data):
         del t_ps
         del _map
 
+    # Write VertexColor Layers
+    # note, no programs seem to use this info :/
+    vcolnumber = len(me.vertex_colors)
+    if vcolnumber:
+        def _coltuples_gen(raw_cols):
+            def _infinite_gen(val):
+                while 1: yield val
+            return zip(*(iter(raw_cols),) * 3 + (_infinite_gen(1.0),))  # We need a fake alpha...
 
-    # TODO: uv, material, etc.
+        t_lc = array.array(data_types.ARRAY_FLOAT64, [0.0] * len(me.loops) * 3)
+        for colindex, collayer in enumerate(me.vertex_colors):
+            collayer.data.foreach_get("color", t_lc)
+            lay_vcol = elem_data_single_int32(geom, b"LayerElementColor", colindex)
+            elem_data_single_int32(lay_vcol, b"Version", FBX_GEOMETRY_VCOLOR_VERSION)
+            elem_data_single_string_unicode(lay_vcol, b"Name", collayer.name)
+            elem_data_single_string(lay_vcol, b"MappingInformationType", b"ByPolygonVertex")
+            elem_data_single_string(lay_vcol, b"ReferenceInformationType", b"IndexToDirect")
+
+            col2idx = tuple(set(_coltuples_gen(t_lc)))
+            lc = array.array(data_types.ARRAY_FLOAT64, sum(col2idx, ()))  # Flatten again...
+            elem_data_single_float64_array(lay_vcol, b"Colors", lc);
+            del lc
+
+            col2idx = {col: idx for idx, col in enumerate(col2idx)}
+            li = array.array(data_types.ARRAY_INT32, (col2idx[c] for c in _coltuples_gen(t_lc)))
+            elem_data_single_int32_array(lay_vcol, b"ColorIndex", li);
+            del li
+            del col2idx
+
+        del t_lc
+
+    # Write UV and texture layers.
+    uvlayers = []
+    uvtextures = []
+    uvnumber = 0 #len(me.uv_layers)
+    do_tex = False
+    """
+    if uvnumber:
+        uvlayers = me.uv_layers
+        uvtextures = me.uv_textures
+        t_uv = [None] * len(me.loops) * 2
+        t_pi = None
+        uv2idx = None
+        tex2idx = None
+        if do_textures:
+            is_tex_unique = len(my_mesh.blenTextures) == 1
+            tex2idx = {None: -1}
+            tex2idx.update({tex: i for i, tex in enumerate(my_mesh.blenTextures)})
+
+        for uvindex, (uvlayer, uvtexture) in enumerate(zip(uvlayers, uvtextures)):
+            uvlayer.data.foreach_get("uv", t_uv)
+            uvco = tuple(zip(*[iter(t_uv)] * 2))
+            fw('\n\t\tLayerElementUV: %d {'
+               '\n\t\t\tVersion: 101'
+               '\n\t\t\tName: "%s"'
+               '\n\t\t\tMappingInformationType: "ByPolygonVertex"'
+               '\n\t\t\tReferenceInformationType: "IndexToDirect"'
+               '\n\t\t\tUV: ' % (uvindex, uvlayer.name))
+            uv2idx = tuple(set(uvco))
+            fw(',\n\t\t\t    '
+               ''.join(','.join('%.6f,%.6f' % uv for uv in chunk) for chunk in grouper_exact(uv2idx, _nchunk)))
+            fw('\n\t\t\tUVIndex: ')
+            uv2idx = {uv: idx for idx, uv in enumerate(uv2idx)}
+            fw(',\n\t\t\t         '
+               ''.join(','.join('%d' % uv2idx[uv] for uv in chunk) for chunk in grouper_exact(uvco, _nchunk_idx)))
+            fw('\n\t\t}')
+
+            if do_textures:
+                fw('\n\t\tLayerElementTexture: %d {'
+                   '\n\t\t\tVersion: 101'
+                   '\n\t\t\tName: "%s"' 
+                   '\n\t\t\tMappingInformationType: "%s"'
+                   '\n\t\t\tReferenceInformationType: "IndexToDirect"'
+                   '\n\t\t\tBlendMode: "Translucent"'
+                   '\n\t\t\tTextureAlpha: 1'
+                   '\n\t\t\tTextureId: '
+                   % (uvindex, uvlayer.name, ('AllSame' if is_tex_unique else 'ByPolygon')))
+                if is_tex_unique:
+                    fw('0')
+                else:
+                    t_pi = (d.image for d in uvtexture.data)  # Can't use foreach_get here :(
+                    fw(',\n\t\t\t           '.join(','.join('%d' % tex2idx[i] for i in chunk)
+                                                   for chunk in grouper_exact(t_pi, _nchunk_idx)))
+                fw('\n\t\t}')
+        if not do_textures:
+            fw('\n\t\tLayerElementTexture: 0 {'
+               '\n\t\t\tVersion: 101'
+               '\n\t\t\tName: ""'
+               '\n\t\t\tMappingInformationType: "NoMappingInformation"'
+               '\n\t\t\tReferenceInformationType: "IndexToDirect"'
+               '\n\t\t\tBlendMode: "Translucent"'
+               '\n\t\t\tTextureAlpha: 1'
+               '\n\t\t\tTextureId: '
+               '\n\t\t}')
+        del t_uv
+        del t_pi
+    """
+
+    # TODO: uvs, textures, materials.
 
     layer = elem_data_single_int32(geom, b"Layer", 0)
     elem_data_single_int32(layer, b"Version", FBX_GEOMETRY_LAYER_VERSION)
@@ -763,7 +863,35 @@ def fbx_data_mesh_elements(root, me, scene_data):
         lay_smooth = elem_empty(layer, b"LayerElement")
         elem_data_single_string(lay_smooth, b"Type", b"LayerElementSmoothing")
         elem_data_single_int32(lay_smooth, b"TypeIndex", 0)
+    if vcolnumber:
+        lay_vcol = elem_empty(layer, b"LayerElement")
+        elem_data_single_string(lay_vcol, b"Type", b"LayerElementColor")
+        elem_data_single_int32(lay_vcol, b"TypeIndex", 0)
+    if uvnumber:
+        lay_uv = elem_empty(layer, b"LayerElement")
+        elem_data_single_string(lay_vcol, b"Type", b"LayerElementUV")
+        elem_data_single_int32(lay_vcol, b"TypeIndex", 0)
+    if do_tex:  # We always want a texture?
+    #if True:
+        lay_tex = elem_empty(layer, b"LayerElement")
+        elem_data_single_string(lay_vcol, b"Type", b"LayerElementTexture")
+        elem_data_single_int32(lay_vcol, b"TypeIndex", 0)
 
+    # Add other uv and/or vcol layers...
+    for vcolidx, uvidx in zip_longest(range(1, vcolnumber), range(1, uvnumber), fillvalue=0):
+        layer = elem_data_single_int32(geom, b"Layer", max(vcolidx, uvidx))
+        elem_data_single_int32(layer, b"Version", FBX_GEOMETRY_LAYER_VERSION)
+        if vcolidx:
+            lay_vcol = elem_empty(layer, b"LayerElement")
+            elem_data_single_string(lay_vcol, b"Type", b"LayerElementColor")
+            elem_data_single_int32(lay_vcol, b"TypeIndex", vcolidx)
+        if uvidx:
+            lay_uv = elem_empty(layer, b"LayerElement")
+            elem_data_single_string(lay_vcol, b"Type", b"LayerElementUV")
+            elem_data_single_int32(lay_vcol, b"TypeIndex", uvidx)
+            lay_tex = elem_empty(layer, b"LayerElement")
+            elem_data_single_string(lay_vcol, b"Type", b"LayerElementTexture")
+            elem_data_single_int32(lay_vcol, b"TypeIndex", uvidx if do_tex else 0)
 
 """
         ["Geometry", [152167664, "::Geometry", "Mesh"], "LSS", [
