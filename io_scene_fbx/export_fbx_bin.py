@@ -341,12 +341,14 @@ def fbx_template_generate(root, fbx_template):
             elem_props_set(props, ptype, name, value)
 
 
-def fbx_template_def_globalsettings(gmat, gscale, override_defaults={}, nbr_users=0):
-    props = override_defaults  # No properties, by default.
+def fbx_template_def_globalsettings(gmat, gscale, override_defaults=None, nbr_users=0):
+    props = {}
+    if override_defaults is not None:
+        props.update(override_defaults)
     return FBXTemplate(b"GlobalSettings", b"", props, nbr_users)
 
 
-def fbx_template_def_model(gmat, gscale, override_defaults={}, nbr_users=0):
+def fbx_template_def_model(gmat, gscale, override_defaults=None, nbr_users=0):
     props = {
         b"QuaternionInterpolate": (False, "p_bool"),
         b"RotationOffset": ((0.0, 0.0, 0.0), "p_vector_3d"),
@@ -419,11 +421,12 @@ def fbx_template_def_model(gmat, gscale, override_defaults={}, nbr_users=0):
         b"Lcl Scaling": (Vector((1.0, 1.0, 1.0)) * gscale, "p_lcl_scaling"),
         b"Visibility": (1.0, "p_visibility"),
     }
-    props.update(override_defaults)
+    if override_defaults is not None:
+        props.update(override_defaults)
     return FBXTemplate(b"Model", b"KFbxNode", props, nbr_users)
 
 
-def fbx_template_def_light(gmat, gscale, override_defaults={}, nbr_users=0):
+def fbx_template_def_light(gmat, gscale, override_defaults=None, nbr_users=0):
     props = {
         b"LightType": (0, "p_enum"),  # Point light.
         b"CastLight": (True, "p_bool"),
@@ -435,35 +438,40 @@ def fbx_template_def_light(gmat, gscale, override_defaults={}, nbr_users=0):
         b"ShadowColor": ((0.0, 0.0, 0.0), "p_color_rgb"),
         b"AreaLightShape": (0, "p_enum"),  # Rectangle.
     }
-    props.update(override_defaults)
+    if override_defaults is not None:
+        props.update(override_defaults)
     return FBXTemplate(b"NodeAttribute", b"KFbxLight", props, nbr_users)
 
 
-def fbx_template_def_camera(gmat, gscale, override_defaults={}, nbr_users=0):
-    props = override_defaults
+def fbx_template_def_camera(gmat, gscale, override_defaults=None, nbr_users=0):
+    props = {}
+    if override_defaults is not None:
+        props.update(override_defaults)
     return FBXTemplate(b"NodeAttribute", b"KFbxCamera", props, nbr_users)
 
 
-def fbx_template_def_cameraswitcher(gmat, gscale, override_defaults={}, nbr_users=0):
+def fbx_template_def_cameraswitcher(gmat, gscale, override_defaults=None, nbr_users=0):
     props = {
         b"Color": ((0.8, 0.8, 0.8), "p_color_rgb"),
         b"Camera Index": (1, "p_integer"),
     }
-    props.update(override_defaults)
+    if override_defaults is not None:
+        props.update(override_defaults)
     return FBXTemplate(b"NodeAttribute", b"KFbxCameraSwitcher", props, nbr_users)
 
 
-def fbx_template_def_geometry(gmat, gscale, override_defaults={}, nbr_users=0):
+def fbx_template_def_geometry(gmat, gscale, override_defaults=None, nbr_users=0):
     props = {
         b"Color": ((0.8, 0.8, 0.8), "p_color_rgb"),
         b"BBoxMin": ((0.0, 0.0, 0.0), "p_vector_3d"),
         b"BBoxMax": ((0.0, 0.0, 0.0), "p_vector_3d"),
     }
-    props.update(override_defaults)
+    if override_defaults is not None:
+        props.update(override_defaults)
     return FBXTemplate(b"Geometry", b"KFbxMesh", props, nbr_users)
 
 
-def fbx_template_def_material(gmat, gscale, override_defaults={}, nbr_users=0):
+def fbx_template_def_material(gmat, gscale, override_defaults=None, nbr_users=0):
     props = {
         b"ShadingModel": ("Lambert", "p_string"),
         b"MultiLayer": (False, "p_bool"),
@@ -481,12 +489,15 @@ def fbx_template_def_material(gmat, gscale, override_defaults={}, nbr_users=0):
         b"DisplacementColor": ((0.0, 0.0, 0.0), "p_color_rgb"),
         b"DisplacementFactor": (1.0, "p_number"),
     }
-    props.update(override_defaults)
+    if override_defaults is not None:
+        props.update(override_defaults)
     return FBXTemplate(b"Material", b"KFbxSurfaceLambert", props, nbr_users)
 
 
-def fbx_template_def_pose(gmat, gscale, override_defaults={}, nbr_users=0):
-    props = override_defaults  # No properties, by default.
+def fbx_template_def_pose(gmat, gscale, override_defaults=None, nbr_users=0):
+    props = {}
+    if override_defaults is not None:
+        props.update(override_defaults)
     return FBXTemplate(b"Pose", b"", props, nbr_users)
 
 
@@ -1062,7 +1073,7 @@ def fbx_takes_elements(root, scene_data):
 def save_single(operator, scene, filepath="",
                 global_matrix=MTX_GLOB,
                 context_objects=None,
-                object_types={'EMPTY', 'CAMERA', 'LAMP', 'ARMATURE', 'MESH'},
+                object_types=None,
                 use_mesh_modifiers=True,
                 mesh_smooth_type='FACE',
                 use_armature_deform_only=False,
@@ -1077,8 +1088,10 @@ def save_single(operator, scene, filepath="",
                 **kwargs
                 ):
 
-    # XXX Temp, during dev...
-    object_types = {'EMPTY', 'CAMERA', 'LAMP', 'MESH'}
+    if object_types is None:
+        # XXX Temp, during dev...
+        object_types = {'EMPTY', 'CAMERA', 'LAMP', 'MESH'}
+        #object_types = {'EMPTY', 'CAMERA', 'LAMP', 'ARMATURE', 'MESH'}
 
     import bpy_extras.io_utils
 
@@ -1130,17 +1143,18 @@ def save_single(operator, scene, filepath="",
 
 # defaults for applications, currently only unity but could add others.
 def defaults_unity3d():
-    return dict(global_matrix=Matrix.Rotation(-math.pi / 2.0, 4, 'X'),
-                use_selection=False,
-                object_types={'ARMATURE', 'EMPTY', 'MESH'},
-                use_mesh_modifiers=True,
-                use_armature_deform_only=True,
-                use_anim=True,
-                use_anim_optimize=False,
-                use_anim_action_all=True,
-                batch_mode='OFF',
-                use_default_take=True,
-                )
+    return {
+        "global_matrix": Matrix.Rotation(-math.pi / 2.0, 4, 'X'),
+        "use_selection": False,
+        "object_types": {'ARMATURE', 'EMPTY', 'MESH'},
+        "use_mesh_modifiers": True,
+        "use_armature_deform_only": True,
+        "use_anim": True,
+        "use_anim_optimize": False,
+        "use_anim_action_all": True,
+        "batch_mode": 'OFF',
+        "use_default_take": True,
+    }
 
 
 def save(operator, context,

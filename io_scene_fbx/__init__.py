@@ -154,7 +154,7 @@ class ExportFBX(bpy.types.Operator, ExportHelper):
     use_new_exporter = BoolProperty(
             name="Use New Exporter",
             description="Use the new (binary only) exporter code - WIP!",
-            default=False,
+            default=True,
             #options={'HIDDEN'},
             )
 
