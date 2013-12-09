@@ -54,7 +54,7 @@ for _t in 'ilq':
     if ARRAY_INT32 and ARRAY_INT64:
         break
 if not ARRAY_INT32:
-    raise Exception("Impossible to get an 4-bytes integer type for array!")
+    raise Exception("Impossible to get a 4-bytes integer type for array!")
 if not ARRAY_INT64:
     raise Exception("Impossible to get an 8-bytes integer type for array!")
 
@@ -69,6 +69,6 @@ for _t in 'fd':
     if ARRAY_FLOAT32 and ARRAY_FLOAT64:
         break
 if not ARRAY_FLOAT32:
-    raise Exception("Impossible to get an 4-bytes float type for array!")
+    raise Exception("Impossible to get a 4-bytes float type for array!")
 if not ARRAY_FLOAT64:
     raise Exception("Impossible to get an 8-bytes float type for array!")

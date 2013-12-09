@@ -49,6 +49,7 @@ FBX_GEOMETRY_VERSION = 124
 FBX_GEOMETRY_NORMAL_VERSION = 101
 FBX_GEOMETRY_SMOOTHING_VERSION = 102
 FBX_GEOMETRY_VCOLOR_VERSION = 101
+FBX_GEOMETRY_UV_VERSION = 101
 FBX_GEOMETRY_MATERIAL_VERSION = 101
 FBX_GEOMETRY_LAYER_VERSION = 100
 
@@ -169,6 +170,11 @@ def get_blender_camera_keys(cam):
     """Return cam + cam switcher keys."""
     key = get_blenderID_key(cam)
     return key, key + "_switcher", key + "_switcher_object"
+
+
+def get_blender_material_key(mat):
+    """Materials are actually (mat, tex) pairs."""
+    return get_blenderID_key(mat[0]) + ";" + get_blenderID_key(mat[1])
 
 
 ##### Element generators. #####
@@ -475,8 +481,9 @@ def fbx_template_def_geometry(gmat, gscale, override_defaults=None, nbr_users=0)
 
 
 def fbx_template_def_material(gmat, gscale, override_defaults=None, nbr_users=0):
+    # WIP...
     props = {
-        b"ShadingModel": ("Lambert", "p_string"),
+        b"ShadingModel": ("lambert", "p_string"),
         b"MultiLayer": (False, "p_bool"),
         b"EmissiveColor": ((0.0, 0.0, 0.0), "p_color_rgb"),
         b"EmissiveFactor": (1.0, "p_number"),
@@ -495,6 +502,15 @@ def fbx_template_def_material(gmat, gscale, override_defaults=None, nbr_users=0)
     if override_defaults is not None:
         props.update(override_defaults)
     return FBXTemplate(b"Material", b"KFbxSurfaceLambert", props, nbr_users)
+
+
+def fbx_template_def_texture_file(gmat, gscale, override_defaults=None, nbr_users=0):
+    # WIP...
+    props = {
+    }
+    if override_defaults is not None:
+        props.update(override_defaults)
+    return FBXTemplate(b"Texture", b"KFbxFileTexture", props, nbr_users)
 
 
 def fbx_template_def_pose(gmat, gscale, override_defaults=None, nbr_users=0):
@@ -718,18 +734,38 @@ def fbx_data_mesh_elements(root, me, scene_data):
 
     # TODO: edges.
 
+    # And now, layers!
+
     # Loop normals.
-    t_vn = array.array(data_types.ARRAY_FLOAT64, [0.0] * len(me.loops) * 3)
+    # NOTE: this is not supported by importer currently.
+    def _nortuples_gen(raw_nors):
+        return zip(*(iter(raw_nors),) * 3)
+
     me.calc_normals_split()
-    me.loops.foreach_get("normal", t_vn)
+    t_ln = array.array(data_types.ARRAY_FLOAT64, [0.0] * len(me.loops) * 3)
+    me.loops.foreach_get("normal", t_ln)
     lay_nor = elem_data_single_int32(geom, b"LayerElementNormal", 0)
     elem_data_single_int32(lay_nor, b"Version", FBX_GEOMETRY_NORMAL_VERSION)
     elem_data_single_string(lay_nor, b"Name", b"")
     elem_data_single_string(lay_nor, b"MappingInformationType", b"ByPolygonVertex")
-    elem_data_single_string(lay_nor, b"ReferenceInformationType", b"Direct") # We could save some space with IndexToDirect here too...
-    elem_data_single_float64_array(lay_nor, b"Normals", t_vn);
-    del t_vn
+    elem_data_single_string(lay_nor, b"ReferenceInformationType", b"IndexToDirect")
+
+    ln2idx = tuple(set(_nortuples_gen(t_ln)))
+    ln = array.array(data_types.ARRAY_FLOAT64, sum(ln2idx, ()))  # Flatten again...
+    elem_data_single_float64_array(lay_nor, b"Normals", ln);
+    del ln
+
+    ln2idx = {nor: idx for idx, nor in enumerate(ln2idx)}
+    li = array.array(data_types.ARRAY_INT32, (ln2idx[n] for n in _nortuples_gen(t_ln)))
+    elem_data_single_int32_array(lay_nor, b"NormalIndex", li);
+    del li
+
+    del ln2idx
+    del t_ln
+    del _nortuples_gen
     me.free_normals_split()
+
+    # TODO: binormal and tangent, to get a complete tspace export.
 
     # Smoothing.
     if smooth_type in {'FACE', 'EDGE'}:
@@ -742,8 +778,9 @@ def fbx_data_mesh_elements(root, me, scene_data):
         else:  # EDGE
             # Write Edge Smoothing
             # XXX Shouldn't this be also dependent on use_mesh_edges?
-            t_ps = array.array(data_types.ARRAY_INT32, [0] * len(me.edges))
+            t_ps = array.array(data_types.ARRAY_BOOL, [False] * len(me.edges))
             me.edges.foreach_get("use_edge_sharp", t_ps)
+            t_ps = array.array(data_types.ARRAY_INT32, (not e for e in t_ps))
             _map = b"ByEdge"
         lay_smooth = elem_data_single_int32(geom, b"LayerElementSmoothing", 0)
         elem_data_single_int32(lay_smooth, b"Version", FBX_GEOMETRY_SMOOTHING_VERSION)
@@ -753,6 +790,8 @@ def fbx_data_mesh_elements(root, me, scene_data):
         elem_data_single_int32_array(lay_smooth, b"Smoothing", t_ps);  # Sight, int32 for bool...
         del t_ps
         del _map
+
+    # TODO: Edge crease (LayerElementCrease).
 
     # Write VertexColor Layers
     # note, no programs seem to use this info :/
@@ -782,77 +821,40 @@ def fbx_data_mesh_elements(root, me, scene_data):
             elem_data_single_int32_array(lay_vcol, b"ColorIndex", li);
             del li
             del col2idx
-
         del t_lc
+        del _coltuples_gen
 
-    # Write UV and texture layers.
-    uvlayers = []
-    uvtextures = []
-    uvnumber = 0 #len(me.uv_layers)
-    do_tex = False
-    """
+    # Write UV layers.
+    # Note: LayerElementTexture is deprecated since FBX 2011 - luckily!
+    #       Textures are now only related to materials, in FBX!
+    uvnumber = len(me.uv_layers)
     if uvnumber:
-        uvlayers = me.uv_layers
-        uvtextures = me.uv_textures
-        t_uv = [None] * len(me.loops) * 2
-        t_pi = None
-        uv2idx = None
-        tex2idx = None
-        if do_textures:
-            is_tex_unique = len(my_mesh.blenTextures) == 1
-            tex2idx = {None: -1}
-            tex2idx.update({tex: i for i, tex in enumerate(my_mesh.blenTextures)})
+        def _uvtuples_gen(raw_uvs):
+            return zip(*(iter(raw_uvs),) * 2)
 
-        for uvindex, (uvlayer, uvtexture) in enumerate(zip(uvlayers, uvtextures)):
-            uvlayer.data.foreach_get("uv", t_uv)
-            uvco = tuple(zip(*[iter(t_uv)] * 2))
-            fw('\n\t\tLayerElementUV: %d {'
-               '\n\t\t\tVersion: 101'
-               '\n\t\t\tName: "%s"'
-               '\n\t\t\tMappingInformationType: "ByPolygonVertex"'
-               '\n\t\t\tReferenceInformationType: "IndexToDirect"'
-               '\n\t\t\tUV: ' % (uvindex, uvlayer.name))
-            uv2idx = tuple(set(uvco))
-            fw(',\n\t\t\t    '
-               ''.join(','.join('%.6f,%.6f' % uv for uv in chunk) for chunk in grouper_exact(uv2idx, _nchunk)))
-            fw('\n\t\t\tUVIndex: ')
+        t_luv = array.array(data_types.ARRAY_FLOAT64, [0.0] * len(me.loops) * 2)
+        for uvindex, uvlayer in enumerate(me.uv_layers):
+            uvlayer.data.foreach_get("uv", t_luv)
+            lay_uv = elem_data_single_int32(geom, b"LayerElementUV", uvindex)
+            elem_data_single_int32(lay_uv, b"Version", FBX_GEOMETRY_UV_VERSION)
+            elem_data_single_string_unicode(lay_uv, b"Name", uvlayer.name)
+            elem_data_single_string(lay_uv, b"MappingInformationType", b"ByPolygonVertex")
+            elem_data_single_string(lay_uv, b"ReferenceInformationType", b"IndexToDirect")
+
+            uv2idx = tuple(set(_uvtuples_gen(t_luv)))
+            luv = array.array(data_types.ARRAY_FLOAT64, sum(uv2idx, ()))  # Flatten again...
+            elem_data_single_float64_array(lay_uv, b"UV", luv);
+            del luv
+
             uv2idx = {uv: idx for idx, uv in enumerate(uv2idx)}
-            fw(',\n\t\t\t         '
-               ''.join(','.join('%d' % uv2idx[uv] for uv in chunk) for chunk in grouper_exact(uvco, _nchunk_idx)))
-            fw('\n\t\t}')
+            li = array.array(data_types.ARRAY_INT32, (uv2idx[uv] for uv in _uvtuples_gen(t_luv)))
+            elem_data_single_int32_array(lay_uv, b"UVIndex", li);
+            del li
+            del uv2idx
+        del t_luv
+        del _uvtuples_gen
 
-            if do_textures:
-                fw('\n\t\tLayerElementTexture: %d {'
-                   '\n\t\t\tVersion: 101'
-                   '\n\t\t\tName: "%s"' 
-                   '\n\t\t\tMappingInformationType: "%s"'
-                   '\n\t\t\tReferenceInformationType: "IndexToDirect"'
-                   '\n\t\t\tBlendMode: "Translucent"'
-                   '\n\t\t\tTextureAlpha: 1'
-                   '\n\t\t\tTextureId: '
-                   % (uvindex, uvlayer.name, ('AllSame' if is_tex_unique else 'ByPolygon')))
-                if is_tex_unique:
-                    fw('0')
-                else:
-                    t_pi = (d.image for d in uvtexture.data)  # Can't use foreach_get here :(
-                    fw(',\n\t\t\t           '.join(','.join('%d' % tex2idx[i] for i in chunk)
-                                                   for chunk in grouper_exact(t_pi, _nchunk_idx)))
-                fw('\n\t\t}')
-        if not do_textures:
-            fw('\n\t\tLayerElementTexture: 0 {'
-               '\n\t\t\tVersion: 101'
-               '\n\t\t\tName: ""'
-               '\n\t\t\tMappingInformationType: "NoMappingInformation"'
-               '\n\t\t\tReferenceInformationType: "IndexToDirect"'
-               '\n\t\t\tBlendMode: "Translucent"'
-               '\n\t\t\tTextureAlpha: 1'
-               '\n\t\t\tTextureId: '
-               '\n\t\t}')
-        del t_uv
-        del t_pi
-    """
-
-    # TODO: uvs, textures, materials.
+    # TODO: materials.
 
     layer = elem_data_single_int32(geom, b"Layer", 0)
     elem_data_single_int32(layer, b"Version", FBX_GEOMETRY_LAYER_VERSION)
@@ -871,11 +873,6 @@ def fbx_data_mesh_elements(root, me, scene_data):
         lay_uv = elem_empty(layer, b"LayerElement")
         elem_data_single_string(lay_vcol, b"Type", b"LayerElementUV")
         elem_data_single_int32(lay_vcol, b"TypeIndex", 0)
-    if do_tex:  # We always want a texture?
-    #if True:
-        lay_tex = elem_empty(layer, b"LayerElement")
-        elem_data_single_string(lay_vcol, b"Type", b"LayerElementTexture")
-        elem_data_single_int32(lay_vcol, b"TypeIndex", 0)
 
     # Add other uv and/or vcol layers...
     for vcolidx, uvidx in zip_longest(range(1, vcolnumber), range(1, uvnumber), fillvalue=0):
@@ -889,46 +886,6 @@ def fbx_data_mesh_elements(root, me, scene_data):
             lay_uv = elem_empty(layer, b"LayerElement")
             elem_data_single_string(lay_vcol, b"Type", b"LayerElementUV")
             elem_data_single_int32(lay_vcol, b"TypeIndex", uvidx)
-            lay_tex = elem_empty(layer, b"LayerElement")
-            elem_data_single_string(lay_vcol, b"Type", b"LayerElementTexture")
-            elem_data_single_int32(lay_vcol, b"TypeIndex", uvidx if do_tex else 0)
-
-"""
-        ["Geometry", [152167664, "::Geometry", "Mesh"], "LSS", [
-            ["Vertices", [[1.0, 1.0, -1.0, 1.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0, 1.0, -1.0, 1.0, 0.999999, 1.0, 0.999999, -1.000001, 1.0, -1.0, -1.0, 1.0, -1.0, 1.0, 1.0]], "d", []],
-            ["PolygonVertexIndex", [[0, 1, 2, -4, 4, 7, 6, -6, 0, 4, 5, -2, 1, 5, 6, -3, 2, 6, 7, -4, 4, 0, 3, -8]], "i", []],
-            ["GeometryVersion", [124], "I", []],
-            ["LayerElementNormal", [0], "I", [
-                ["Version", [101], "I", []],
-                ["Name", [""], "S", []],
-                ["MappingInformationType", ["ByVertice"], "S", []],
-                ["ReferenceInformationType", ["Direct"], "S", []],
-                ["Normals", [[0.577349185943604, 0.577349185943604, -0.577349185943604, 0.577349185943604, -0.577349185943604, -0.577349185943604, -0.577349185943604, -0.577349185943604, -0.577349185943604, -0.577349185943604, 0.577349185943604, -0.577349185943604, 0.577349185943604, 0.577349185943604, 0.577349185943604, 0.577349185943604, -0.577349185943604, 0.577349185943604, -0.577349185943604, -0.577349185943604, 0.577349185943604, -0.577349185943604, 0.577349185943604, 0.577349185943604]], "d", []]]],
-            ["LayerElementSmoothing", [0], "I", [
-                ["Version", [102], "I", []],
-                ["Name", [""], "S", []],
-                ["MappingInformationType", ["ByPolygon"], "S", []],
-                ["ReferenceInformationType", ["Direct"], "S", []],
-                ["Smoothing", [[0, 0, 0, 0, 0, 0]], "i", []]]],
-            ["LayerElementMaterial", [0], "I", [
-                ["Version", [101], "I", []],
-                ["Name", [""], "S", []],
-                ["MappingInformationType", ["AllSame"], "S", []],
-                ["ReferenceInformationType", ["IndexToDirect"], "S", []],
-                ["Materials", [[0]], "i", []]]],
-            ["Layer", [0], "I", [
-                ["Version", [100], "I", []],
-                ["LayerElement", [], "", [
-                    ["Type", ["LayerElementNormal"], "S", []],
-                    ["TypedIndex", [0], "I", []]]],
-                ["LayerElement", [], "", [
-                    ["Type", ["LayerElementMaterial"], "S", []],
-                    ["TypedIndex", [0], "I", []]]],
-                ["LayerElement", [], "", [
-                    ["Type", ["LayerElementSmoothing"], "S", []],
-                    ["TypedIndex", [0], "I", []]]]]]]],
-"""
-
 
 
 def fbx_data_object_elements(root, obj, scene_data):
@@ -1034,6 +991,24 @@ def fbx_data_from_scene(scene, settings):
     data_cameras = {obj: get_blender_camera_keys(obj.data) for obj in objects if obj.type == 'CAMERA'}
     data_meshes = {obj.data: get_blenderID_key(obj.data) for obj in objects if obj.type == 'MESH'}
 
+    # TODO Mat/Tex would need investigation!
+    #      For now, use similar system as for ASCII 6.1 exporter: (mat, tex) pairs, textures only from UVmaps
+    #      (more images than textures, actually!).
+    """
+    data_materials = {}
+    data_textures = {}
+    for me in data_meshes:
+        mats = me.materials[:] or [None]
+        for uvlayer in me.uv_textures:
+            for p, p_uv in zip(me.polygons, uvlayer.data):
+                tex = p_uv.image
+                mat = (mats[p.material_index], tex)
+                if tex not in data_textures:
+                    data_textures[tex] = get_blenderID_key(tex)
+                if mat not in data_materials:
+                    data_materials[mat] = get_blender_material_key(mat)
+    """
+
     if objects:
         # We use len(object) + len(data_cameras) because of the CameraSwitcher objects...
         templates[b"Model"] = fbx_template_def_model(gmat, gscale, nbr_users=len(objects) + len(data_cameras))
@@ -1048,6 +1023,14 @@ def fbx_data_from_scene(scene, settings):
 
     if data_meshes:
         templates[b"Geometry"] = fbx_template_def_geometry(gmat, gscale, nbr_users=len(data_meshes))
+
+    """
+    if data_materials:
+        templates[b"Geometry"] = fbx_template_def_geometry(gmat, gscale, nbr_users=len(data_meshes))
+
+    if data_textures:
+        templates[b"Geometry"] = fbx_template_def_geometry(gmat, gscale, nbr_users=len(data_meshes))
+    """
 
     templates_users = sum(tmpl.nbr_users for tmpl in templates.values())
     return FBXData(
