@@ -871,8 +871,8 @@ def fbx_data_mesh_elements(root, me, scene_data):
         elem_data_single_int32(lay_vcol, b"TypeIndex", 0)
     if uvnumber:
         lay_uv = elem_empty(layer, b"LayerElement")
-        elem_data_single_string(lay_vcol, b"Type", b"LayerElementUV")
-        elem_data_single_int32(lay_vcol, b"TypeIndex", 0)
+        elem_data_single_string(lay_uv, b"Type", b"LayerElementUV")
+        elem_data_single_int32(lay_uv, b"TypeIndex", 0)
 
     # Add other uv and/or vcol layers...
     for vcolidx, uvidx in zip_longest(range(1, vcolnumber), range(1, uvnumber), fillvalue=0):
@@ -884,8 +884,8 @@ def fbx_data_mesh_elements(root, me, scene_data):
             elem_data_single_int32(lay_vcol, b"TypeIndex", vcolidx)
         if uvidx:
             lay_uv = elem_empty(layer, b"LayerElement")
-            elem_data_single_string(lay_vcol, b"Type", b"LayerElementUV")
-            elem_data_single_int32(lay_vcol, b"TypeIndex", uvidx)
+            elem_data_single_string(lay_uv, b"Type", b"LayerElementUV")
+            elem_data_single_int32(lay_uv, b"TypeIndex", uvidx)
 
 
 def fbx_data_object_elements(root, obj, scene_data):
@@ -971,6 +971,24 @@ FBXData = namedtuple("FBXData", (
 ))
 
 
+def fbx_mat_properties_from_texture(mat, tex):
+    """
+    Returns a set of FBX metarial properties that are affected by the given texture.
+    Quite obviously, this is a fuzzy and far-from-perfect mapping! Amounts of influence are completely lost, e.g.
+    """
+    # Tex influence does not exists in FBX, so assume influence < 0.5 = no influence... :/
+    INLUENCE_THRESHOLD = 0.5
+
+    tex_fbx_props = set()
+    # mat is assumed to be Lambert diffuse...
+    if tex.use_map_diffuse and tex.diffuse_factor >= INLUENCE_THRESHOLD:
+        tex_fbx_props.add("DiffuseFactor")
+    if tex.use_map_color_diffuse and tex.diffuse_color_factor >= INLUENCE_THRESHOLD:
+        tex_fbx_props.add("Diffuse")
+    if tex.use_map_alpha and tex.alpha_factor >= INLUENCE_THRESHOLD:
+        tex_fbx_props.add("TransparencyFactor")
+
+
 def fbx_data_from_scene(scene, settings):
     """
     Do some pre-processing over scene's data...
@@ -991,9 +1009,33 @@ def fbx_data_from_scene(scene, settings):
     data_cameras = {obj: get_blender_camera_keys(obj.data) for obj in objects if obj.type == 'CAMERA'}
     data_meshes = {obj.data: get_blenderID_key(obj.data) for obj in objects if obj.type == 'MESH'}
 
-    # TODO Mat/Tex would need investigation!
-    #      For now, use similar system as for ASCII 6.1 exporter: (mat, tex) pairs, textures only from UVmaps
-    #      (more images than textures, actually!).
+    data_world = (scene.world, {})  # Some world settings are embedded in FBX materials...
+
+    # Note theoretically, FBX supports any kind of materials, even GLSL shaders etc.
+    # However, I doubt anything else than Lambert/Phong is really portable!
+    # TODO: Support nodes (*BIG* todo!).
+    data_materials = {mat_s.material: get_blenderID_key(mat_s.material)
+                      for obj in objects for mat_s in obj.material_slots
+                      if mat_s.material.type in {'SURFACE'} and mat_s.material.diffuse_shader in {'LAMBERT'}}
+
+    # Note FBX textures also holds their mapping info.
+    data_textures = {}
+    # For now, do not use world textures, don't think they can be linked to anything FBX wise...
+    for mat, (_k, texs) in data_materials.items():
+        for tex in material.texture_slots:
+            # For now, only consider image textures.
+            # Note FBX does has support for procedural, but this is not portable at all (opaque byte array),
+            # so not useful for us.
+            if tex.texture.type not in {'IMAGE', 'ENVIRONMENT_MAP'}:
+                continue
+            # Find out whether we can actually use this texture for this material, in FBX context.
+            tex_fbx_props = fbx_mat_properties_from_texture(mat, tex)
+            if not tex_fbx_props:
+                continue
+            if tex not in data_textures:
+                data_textures[tex] = (get_blenderID_key(tex.name), {mat: tex_fbx_props})
+            else:
+                data_textures[tex][1][mat] = tex_fbx_props
     """
     data_materials = {}
     data_textures = {}
