@@ -52,6 +52,8 @@ FBX_GEOMETRY_VCOLOR_VERSION = 101
 FBX_GEOMETRY_UV_VERSION = 101
 FBX_GEOMETRY_MATERIAL_VERSION = 101
 FBX_GEOMETRY_LAYER_VERSION = 100
+FBX_MATERIAL_VERSION = 102
+FBX_TEXTURE_VERSION = 202
 
 FBX_NAME_CLASS_SEP = b"\x00\x01"
 
@@ -327,10 +329,26 @@ def elem_props_template_set(template, elem, ptype_name, name, value):
 
 ##### Generators for connection elements. #####
 
-def  elem_connection(elem, c_type, uid_src, uid_dst):
+def elem_connection(elem, c_type, uid_src, uid_dst, prop_dst=None):
     e = elem_data_single_string(elem, b"C", c_type)
     e.add_int64(uid_src)
     e.add_int64(uid_dst)
+    if prop_dst is not None:
+        e.add_string(prop_dst)
+
+
+def elem_connection_oo(elem, uid_src, uid_dst):
+    """
+    Object to Object connection.
+    """
+    elem_connection(elem, b"OO", uid_src, uid_dst)
+
+
+def elem_connection_op(elem, uid_src, uid_dst, prop_dst):
+    """
+    Object to object Property connection.
+    """
+    elem_connection(elem, b"OP", uid_src, uid_dst, prop_dst)
 
 
 ##### Templates #####
@@ -483,35 +501,57 @@ def fbx_template_def_geometry(gmat, gscale, override_defaults=None, nbr_users=0)
 def fbx_template_def_material(gmat, gscale, override_defaults=None, nbr_users=0):
     # WIP...
     props = {
-        b"ShadingModel": ("lambert", "p_string"),
+        b"ShadingModel": ("phong", "p_string"),
         b"MultiLayer": (False, "p_bool"),
-        b"EmissiveColor": ((0.0, 0.0, 0.0), "p_color_rgb"),
-        b"EmissiveFactor": (1.0, "p_number"),
-        b"AmbientColor": ((0.2, 0.2, 0.2), "p_color_rgb"),
+        # Lambert-specific.
+        b"EmissiveColor": ((0.8, 0.8, 0.8), "p_color_rgb"),  # Same as diffuse.
+        b"EmissiveFactor": (0.0, "p_number"),
+        b"AmbientColor": ((0.0, 0.0, 0.0), "p_color_rgb"),
         b"AmbientFactor": (1.0, "p_number"),
         b"DiffuseColor": ((0.8, 0.8, 0.8), "p_color_rgb"),
-        b"DiffuseFactor": (1.0, "p_number"),
-        b"Bump": ((0.0, 0.0, 0.0), "p_vector_3d"),
-        b"NormalMap": ((0.0, 0.0, 0.0), "p_vector_3d"),
-        b"BumpFactor": (1.0, "p_number"),
-        b"TransparentColor": ((0.0, 0.0, 0.0), "p_color_rgb"),
+        b"DiffuseFactor": (0.8, "p_number"),
+        b"TransparentColor": ((0.8, 0.8, 0.8), "p_color_rgb"),  # Same as diffuse.
         b"TransparencyFactor": (0.0, "p_number"),
+        b"NormalMap": ((0.0, 0.0, 0.0), "p_vector_3d"),
+        b"Bump": ((0.0, 0.0, 0.0), "p_vector_3d"),
+        b"BumpFactor": (1.0, "p_number"),
         b"DisplacementColor": ((0.0, 0.0, 0.0), "p_color_rgb"),
-        b"DisplacementFactor": (1.0, "p_number"),
+        b"DisplacementFactor": (0.0, "p_number"),
+        # Phong-specific.
+        b"SpecularColor": ((1.0, 1.0, 1.0), "p_color_rgb"),
+        b"SpecularFactor": (0.5, "p_number"),
+        b"Shininess": (50.0, "p_number"),  # Not sure about that name... :/
+        b"ReflectionColor": ((1.0, 1.0, 1.0), "p_color_rgb"),
+        b"RefectionFactor": (0.0, "p_number"),
     }
     if override_defaults is not None:
         props.update(override_defaults)
-    return FBXTemplate(b"Material", b"KFbxSurfaceLambert", props, nbr_users)
+    return FBXTemplate(b"Material", b"KFbxSurfacePhong", props, nbr_users)
 
 
 def fbx_template_def_texture_file(gmat, gscale, override_defaults=None, nbr_users=0):
     # WIP...
+    # XXX Not sure about all names!
     props = {
+        b"TextureTypeUse": (0, "p_enum"),  # Standard.
+        b"AlphaSource": (2, "p_enum"),  # Black (i.e. texture's alpha), XXX name guessed!.
+        b"Alpha": (1.0, "p_number"),
+        b"PremultiplyAlpha": (False, "p_bool"),
+        b"CurrentTextureBlendMode": (0, "p_enum"),  # Translucent, assuming this means "Alpha over"!
+        b"CurrentMappingType": (1, "p_enum"),  # Planar.
+        b"WrapModeU": (0, "p_enum"),  # Repeat.
+        b"WrapModeV": (0, "p_enum"),  # Repeat.
+        b"UVSwap": (False, "p_bool"),
+        b"Translation": ((0.0, 0.0, 0.0), "p_vector_3d"),
+        b"Rotation": ((0.0, 0.0, 0.0), "p_vector_3d"),
+        b"Scaling": ((1.0, 1.0, 1.0), "p_vector_3d"),
+        b"RotationPivot": ((0.0, 0.0, 0.0), "p_vector_3d"),  # Assuming (0.0, 0.0, 0.0) is the center of picture...
+        b"ScalingPivot": ((0.0, 0.0, 0.0), "p_vector_3d"),  # Assuming (0.0, 0.0, 0.0) is the center of picture...
     }
     if override_defaults is not None:
         props.update(override_defaults)
     return FBXTemplate(b"Texture", b"KFbxFileTexture", props, nbr_users)
-
+ 
 
 def fbx_template_def_pose(gmat, gscale, override_defaults=None, nbr_users=0):
     props = {}
@@ -610,7 +650,7 @@ def fbx_data_lamp_elements(root, lamp, scene_data):
         elem_props_template_set(tmpl, props, "p_number", b"OuterAngle", math.degrees(lamp.spot_size))
         elem_props_template_set(tmpl, props, "p_number", b"InnerAngle",
                                 math.degrees(lamp.spot_size * (1.0 - lamp.spot_blend)))
-    
+
 
 def fbx_data_camera_elements(root, cam_obj, scene_data):
     """
@@ -888,6 +928,111 @@ def fbx_data_mesh_elements(root, me, scene_data):
             elem_data_single_int32(lay_uv, b"TypeIndex", uvidx)
 
 
+def fbx_data_material_elements(root, mat, scene_data):
+    """
+    Write the Material data block.
+    """
+    world = next(iter(scene_data.world.keys()))
+
+    mat_key = scene_data.data_materials[mat]
+    # Approximation...
+    mat_type = b"phong" if mat.specular_shader in {'COOKTORR', 'PHONG', 'BLINN'} else b"lambert"
+
+    fbx_mat = elem_data_single_int64(root, b"Material", get_fbxuid_from_key(mat_key))
+    fbx_mat.add_string(fbx_name_class(mat.name.encode(), b"Material"))
+    fbx_mat.add_string(b"")
+
+    elem_data_single_int32(fbx_mat, b"Version", FBX_MATERIAL_VERSION)
+    # those are not yet properties, it seems...
+    elem_data_single_string(fbx_mat, b"ShadingModel", mat_type)
+    elem_data_single_int32(fbx_mat, b"MultiLayer", 0)  # Should be bool...
+
+    tmpl = scene_data.templates[b"Material"]
+    props = elem_properties(fbx_mat)
+    elem_props_template_set(tmpl, props, "p_color_rgb", b"EmissiveColor", mat.diffuse_color)
+    elem_props_template_set(tmpl, props, "p_number", b"EmissiveFactor", mat.emit)
+    elem_props_template_set(tmpl, props, "p_color_rgb", b"AmbientColor", world.ambient_color)
+    elem_props_template_set(tmpl, props, "p_number", b"AmbientFactor", mat.ambient)
+    elem_props_template_set(tmpl, props, "p_color_rgb", b"DiffuseColor", mat.diffuse_color)
+    elem_props_template_set(tmpl, props, "p_number", b"DiffuseFactor", mat.diffuse_intensity)
+    elem_props_template_set(tmpl, props, "p_color_rgb", b"TransparentColor", mat.diffuse_color)
+    elem_props_template_set(tmpl, props, "p_number", b"TransparencyFactor", mat.alpha if mat.use_transparency else 1.0)
+    # Those are for later!
+    """ 
+    b"NormalMap": ((0.0, 0.0, 0.0), "p_vector_3d"),
+    b"Bump": ((0.0, 0.0, 0.0), "p_vector_3d"),
+    b"BumpFactor": (1.0, "p_number"),
+    b"DisplacementColor": ((0.0, 0.0, 0.0), "p_color_rgb"),
+    b"DisplacementFactor": (0.0, "p_number"),
+    """
+    if mat_type == b"phong":
+        elem_props_template_set(tmpl, props, "p_color_rgb", b"SpecularColor", mat.specular_color)
+        elem_props_template_set(tmpl, props, "p_number", b"SpecularFactor", mat.specular_intensity)
+        elem_props_template_set(tmpl, props, "p_number", b"Shininess", mat.specular_hardness)  # Check this is valid!
+        elem_props_template_set(tmpl, props, "p_color_rgb", b"ReflectionColor", mat.mirror_color)
+        elem_props_template_set(tmpl, props, "p_number", b"RefectionFactor",
+                                mat.raytrace_mirror.reflect_factor if mat.raytrace_mirror.use else 0.0)
+
+
+def fbx_data_texture_file_elements(root, tex, scene_data):
+    """
+    Write the (file) Texture data block.
+    """
+    tex_key = scene_data.data_textures[tex]
+
+    fbx_tex = elem_data_single_int64(root, b"Texture", get_fbxuid_from_key(lamp_key))
+    fbx_tex.add_string(fbx_name_class(tex.name.encode(), b"Texture"))
+    fbx_tex.add_string(b"")
+
+    elem_data_single_int32(fbx_tex, b"Version", FBX_TEXTURE_VERSION)
+
+    tmpl = scene_data.templates[b"TextureFile"]
+    props = elem_properties(fbx_tex)
+    elem_props_template_set(tmpl, props, "p_enum", b"LightType", FBX_LIGHT_TYPES[lamp.type])
+    elem_props_template_set(tmpl, props, "p_bool", b"CastLight", do_light)
+    elem_props_template_set(tmpl, props, "p_color_rgb", b"Color", lamp.color)
+    elem_props_template_set(tmpl, props, "p_number", b"Intensity", lamp.energy * 100.0)
+    elem_props_template_set(tmpl, props, "p_enum", b"DecayType", decay_type)
+    elem_props_template_set(tmpl, props, "p_number", b"DecayStart", lamp.distance * gscale)
+    elem_props_template_set(tmpl, props, "p_bool", b"CastShadows", do_shadow)
+    elem_props_template_set(tmpl, props, "p_color_rgb", b"ShadowColor", shadow_color)
+    if lamp.type in {'SPOT'}:
+        elem_props_template_set(tmpl, props, "p_number", b"OuterAngle", math.degrees(lamp.spot_size))
+        elem_props_template_set(tmpl, props, "p_number", b"InnerAngle",
+                                math.degrees(lamp.spot_size * (1.0 - lamp.spot_blend)))
+
+
+        b"TextureTypeUse": (0, "p_enum"),  # Standard.
+        b"AlphaSource": (2, "p_enum"),  # Black (i.e. texture's alpha), XXX name guessed!.
+        b"Alpha": (1.0, "p_number"),
+        b"PremultiplyAlpha": (False, "p_bool"),
+        b"CurrentTextureBlendMode": (0, "p_enum"),  # Translucent, assuming this means "Alpha over"!
+        b"CurrentMappingType": (1, "p_enum"),  # Planar.
+        b"WrapModeU": (0, "p_enum"),  # Repeat.
+        b"WrapModeV": (0, "p_enum"),  # Repeat.
+        b"UVSwap": (False, "p_bool"),
+        b"Translation": ((0.0, 0.0, 0.0), "p_vector_3d"),
+        b"Rotation": ((0.0, 0.0, 0.0), "p_vector_3d"),
+        b"Scaling": ((1.0, 1.0, 1.0), "p_vector_3d"),
+        b"RotationPivot": ((0.0, 0.0, 0.0), "p_vector_3d"),  # Assuming (0.0, 0.0, 0.0) is the center of picture...
+        b"ScalingPivot": ((0.0, 0.0, 0.0), "p_vector_3d"),  # Assuming (0.0, 0.0, 0.0) is the center of picture...
+
+
+        ["Texture", [984120400, "HDR::Texture", ""], "LSS", [
+            ["Type", ["TextureVideoClip"], "S", []],
+            ["Version", [202], "I", []],
+            ["TextureName", ["HDR::Texture"], "S", []],
+            ["Properties70", [], "", [
+                ["P", ["UseMaterial", "bool", "", "", 1], "SSSSI", []]]],
+            ["Media", ["HDR::Video"], "S", []],
+            ["FileName", ["E:/HyperspaceMadness_UE3/SpaceMadness/Art/demos/DX11_Examples/Minion_LOD2_DX11_1024_Animation_Ram.fbm/Global_Illumination.png"], "S", []],
+            ["RelativeFilename", ["Minion_LOD2_DX11_1024_Animation_Ram.fbm\\Global_Illumination.png"], "S", []],
+            ["ModelUVTranslation", [0.0, 0.0], "DD", []],
+            ["ModelUVScaling", [1.0, 1.0], "DD", []],
+            ["Texture_Alpha_Source", ["None"], "S", []],
+            ["Cropping", [0, 0, 0, 0], "IIII", []]]],
+ 
+
 def fbx_data_object_elements(root, obj, scene_data):
     """
     Write the Object (Model) data blocks.
@@ -968,13 +1113,15 @@ FBXData = namedtuple("FBXData", (
     "templates", "templates_users",
     "settings", "scene", "objects",
     "data_lamps", "data_cameras", "data_meshes",
+    "data_world", "data_materials", "data_textures",
 ))
 
 
-def fbx_mat_properties_from_texture(mat, tex):
+def fbx_mat_properties_from_texture(tex):
     """
     Returns a set of FBX metarial properties that are affected by the given texture.
     Quite obviously, this is a fuzzy and far-from-perfect mapping! Amounts of influence are completely lost, e.g.
+    Note tex is actually expected to be a texture slot.
     """
     # Tex influence does not exists in FBX, so assume influence < 0.5 = no influence... :/
     INLUENCE_THRESHOLD = 0.5
@@ -982,11 +1129,14 @@ def fbx_mat_properties_from_texture(mat, tex):
     tex_fbx_props = set()
     # mat is assumed to be Lambert diffuse...
     if tex.use_map_diffuse and tex.diffuse_factor >= INLUENCE_THRESHOLD:
-        tex_fbx_props.add("DiffuseFactor")
+        tex_fbx_props.add(b"DiffuseFactor")
     if tex.use_map_color_diffuse and tex.diffuse_color_factor >= INLUENCE_THRESHOLD:
-        tex_fbx_props.add("Diffuse")
+        tex_fbx_props.add(b"Diffuse")
     if tex.use_map_alpha and tex.alpha_factor >= INLUENCE_THRESHOLD:
-        tex_fbx_props.add("TransparencyFactor")
+        tex_fbx_props.add(b"TransparencyFactor")
+    # etc., will complete the list later.
+
+    return tex_fbx_props
 
 
 def fbx_data_from_scene(scene, settings):
@@ -1009,47 +1159,40 @@ def fbx_data_from_scene(scene, settings):
     data_cameras = {obj: get_blender_camera_keys(obj.data) for obj in objects if obj.type == 'CAMERA'}
     data_meshes = {obj.data: get_blenderID_key(obj.data) for obj in objects if obj.type == 'MESH'}
 
-    data_world = (scene.world, {})  # Some world settings are embedded in FBX materials...
+    # Some world settings are embedded in FBX materials...
+    data_world = {scene.world: get_blenderID_key(scene.world)}
 
-    # Note theoretically, FBX supports any kind of materials, even GLSL shaders etc.
-    # However, I doubt anything else than Lambert/Phong is really portable!
-    # TODO: Support nodes (*BIG* todo!).
-    data_materials = {mat_s.material: get_blenderID_key(mat_s.material)
-                      for obj in objects for mat_s in obj.material_slots
-                      if mat_s.material.type in {'SURFACE'} and mat_s.material.diffuse_shader in {'LAMBERT'}}
+    data_materials = {}
+    for obj in objects:
+        for mat_s in obj.material_slots:
+            mat = mat_s.material
+            # Note theoretically, FBX supports any kind of materials, even GLSL shaders etc.
+            # However, I doubt anything else than Lambert/Phong is really portable!
+            # TODO: Support nodes (*BIG* todo!).
+            if mat.type in {'SURFACE'} and mat.diffuse_shader in {'LAMBERT'} and not mat.use_nodes:
+                if mat in data_materials:
+                    data_materials[mat][1].append(obj)
+                else:
+                    data_materials[mat] = (get_blenderID_key(mat), [obj])
 
     # Note FBX textures also holds their mapping info.
     data_textures = {}
     # For now, do not use world textures, don't think they can be linked to anything FBX wise...
-    for mat, (_k, texs) in data_materials.items():
+    for mat in data_materials.keys():
         for tex in material.texture_slots:
             # For now, only consider image textures.
-            # Note FBX does has support for procedural, but this is not portable at all (opaque byte array),
+            # Note FBX does has support for procedural, but this is not portable at all (opaque blob),
             # so not useful for us.
             if tex.texture.type not in {'IMAGE', 'ENVIRONMENT_MAP'}:
                 continue
             # Find out whether we can actually use this texture for this material, in FBX context.
-            tex_fbx_props = fbx_mat_properties_from_texture(mat, tex)
+            tex_fbx_props = fbx_mat_properties_from_texture(tex)
             if not tex_fbx_props:
                 continue
             if tex not in data_textures:
                 data_textures[tex] = (get_blenderID_key(tex.name), {mat: tex_fbx_props})
             else:
                 data_textures[tex][1][mat] = tex_fbx_props
-    """
-    data_materials = {}
-    data_textures = {}
-    for me in data_meshes:
-        mats = me.materials[:] or [None]
-        for uvlayer in me.uv_textures:
-            for p, p_uv in zip(me.polygons, uvlayer.data):
-                tex = p_uv.image
-                mat = (mats[p.material_index], tex)
-                if tex not in data_textures:
-                    data_textures[tex] = get_blenderID_key(tex)
-                if mat not in data_materials:
-                    data_materials[mat] = get_blender_material_key(mat)
-    """
 
     if objects:
         # We use len(object) + len(data_cameras) because of the CameraSwitcher objects...
@@ -1066,19 +1209,24 @@ def fbx_data_from_scene(scene, settings):
     if data_meshes:
         templates[b"Geometry"] = fbx_template_def_geometry(gmat, gscale, nbr_users=len(data_meshes))
 
+    # No world support in FBX...
     """
+    if data_world:
+        templates[b"World"] = fbx_template_def_world(gmat, gscale, nbr_users=len(data_world))
+    """
+
     if data_materials:
-        templates[b"Geometry"] = fbx_template_def_geometry(gmat, gscale, nbr_users=len(data_meshes))
+        templates[b"Material"] = fbx_template_def_material(gmat, gscale, nbr_users=len(data_materials))
 
     if data_textures:
-        templates[b"Geometry"] = fbx_template_def_geometry(gmat, gscale, nbr_users=len(data_meshes))
-    """
+        templates[b"TextureFile"] = fbx_template_def_texture_file(gmat, gscale, nbr_users=len(data_textures))
 
     templates_users = sum(tmpl.nbr_users for tmpl in templates.values())
     return FBXData(
         templates, templates_users,
         settings, scene, objects,
         data_lamps, data_cameras, data_meshes,
+        data_world, data_materials, data_textures,
     )
 
 
@@ -1229,23 +1377,35 @@ def fbx_connections_elements(root, scene_data):
         if par and par in scene_data.objects:
             # TODO: Check this is the correct way to have object parenting!
             par_key = scene_data.objects[par]
-        elem_connection(connections, b"OO", get_fbxuid_from_key(obj_key), get_fbxuid_from_key(par_key))
+        elem_connection_oo(connections, get_fbxuid_from_key(obj_key), get_fbxuid_from_key(par_key))
 
     # And now, object data.
     for obj_cam, (cam_key, cam_switcher_key, cam_obj_switcher_key) in scene_data.data_cameras.items():
         # Looks like the 'object' ('Model' in FBX) for the camera switcher is not linked to anything in FBX...
-        elem_connection(connections, b"OO", get_fbxuid_from_key(cam_switcher_key),
+        elem_connection_oo(connections, get_fbxuid_from_key(cam_switcher_key),
                         get_fbxuid_from_key(cam_obj_switcher_key))
         cam_obj_key = scene_data.objects[obj_cam]
-        elem_connection(connections, b"OO", get_fbxuid_from_key(cam_key), get_fbxuid_from_key(cam_obj_key))
+        elem_connection_oo(connections, get_fbxuid_from_key(cam_key), get_fbxuid_from_key(cam_obj_key))
 
     for obj, obj_key in scene_data.objects.items():
         if obj.type == 'LAMP':
             lamp_key = scene_data.data_lamps[obj.data]
-            elem_connection(connections, b"OO", get_fbxuid_from_key(lamp_key), get_fbxuid_from_key(obj_key))
+            elem_connection_oo(connections, get_fbxuid_from_key(lamp_key), get_fbxuid_from_key(obj_key))
         elif obj.type == 'MESH':
             mesh_key = scene_data.data_meshes[obj.data]
-            elem_connection(connections, b"OO", get_fbxuid_from_key(mesh_key), get_fbxuid_from_key(obj_key))
+            elem_connection_oo(connections, get_fbxuid_from_key(mesh_key), get_fbxuid_from_key(obj_key))
+
+    for mat, (mat_key, objs) in scene_data.materials.items():
+        for obj in objs:
+            obj_key = scene_data.data_objects[obj]
+            elem_connection_oo(connections, get_fbxuid_from_key(mat_key), get_fbxuid_from_key(obj_key))
+
+    for tex, (tex_key, mats) in scene_data.textures.items():
+        for mat, fbx_mat_props in mats.items():
+            mat_key = scene_data.data_materials[mat]
+            for fbx_prop in fbx_mat_props:
+                elem_connection_op(connections, get_fbxuid_from_key(tex_key), get_fbxuid_from_key(mat_key), fbx_prop)
+
 
 
 def fbx_takes_elements(root, scene_data):
