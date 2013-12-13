@@ -150,21 +150,33 @@ class FBXElem:
         self.props.append(data)
 
     def add_int32_array(self, data):
+        if not isinstance(data, array.array):
+            data = array.array(data_types.ARRAY_INT32, data)
         self._add_array_helper(data, data_types.ARRAY_INT32, data_types.INT32_ARRAY)
 
     def add_int64_array(self, data):
+        if not isinstance(data, array.array):
+            data = array.array(data_types.ARRAY_INT64, data)
         self._add_array_helper(data, data_types.ARRAY_INT64, data_types.INT64_ARRAY)
 
     def add_float32_array(self, data):
+        if not isinstance(data, array.array):
+            data = array.array(data_types.ARRAY_FLOAT32, data)
         self._add_array_helper(data, data_types.ARRAY_FLOAT32, data_types.FLOAT32_ARRAY)
 
     def add_float64_array(self, data):
+        if not isinstance(data, array.array):
+            data = array.array(data_types.ARRAY_FLOAT64, data)
         self._add_array_helper(data, data_types.ARRAY_FLOAT64, data_types.FLOAT64_ARRAY)
 
     def add_bool_array(self, data):
+        if not isinstance(data, array.array):
+            data = array.array(data_types.ARRAY_BOOL, data)
         self._add_array_helper(data, data_types.ARRAY_BOOL, data_types.BOOL_ARRAY)
 
     def add_byte_array(self, data):
+        if not isinstance(data, array.array):
+            data = array.array(data_types.ARRAY_BYTE, data)
         self._add_array_helper(data, data_types.ARRAY_BYTE, data_types.BYTE_ARRAY)
 
     # -------------------------
