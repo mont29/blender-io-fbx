@@ -290,7 +290,7 @@ FBX_PROPERTIES_DEFINITIONS = {
     "p_lcl_scaling": (b"Lcl Scaling", b"", b"A+", "add_float64", "add_float64", "add_float64"),
     "p_color_rgb": (b"ColorRGB", b"Color", b"", "add_float64", "add_float64", "add_float64"),
     "p_string": (b"KString", b"", b"", "add_string_unicode"),
-    "p_string_url": (b"KString", b"Url", b"", "add_string_unicode"),
+    "p_string_url": (b"KString", b"XRefUrl", b"", "add_string_unicode"),
     "p_timestamp": (b"KTime", b"Time", b"", "add_int64"),
     "p_object": (b"object", b"", b""),  # XXX Check this! No value for this prop???
 }
@@ -368,14 +368,15 @@ def fbx_template_generate(root, fbx_template):
             elem_props_set(props, ptype, name, value)
 
 
-def fbx_template_def_globalsettings(gmat, gscale, override_defaults=None, nbr_users=0):
+def fbx_template_def_globalsettings(scene, settings, override_defaults=None, nbr_users=0):
     props = {}
     if override_defaults is not None:
         props.update(override_defaults)
     return FBXTemplate(b"GlobalSettings", b"", props, nbr_users)
 
 
-def fbx_template_def_model(gmat, gscale, override_defaults=None, nbr_users=0):
+def fbx_template_def_model(scene, settings, override_defaults=None, nbr_users=0):
+    gscale = settings.global_scale
     props = {
         b"QuaternionInterpolate": (False, "p_bool"),
         b"RotationOffset": ((0.0, 0.0, 0.0), "p_vector_3d"),
@@ -453,7 +454,8 @@ def fbx_template_def_model(gmat, gscale, override_defaults=None, nbr_users=0):
     return FBXTemplate(b"Model", b"KFbxNode", props, nbr_users)
 
 
-def fbx_template_def_light(gmat, gscale, override_defaults=None, nbr_users=0):
+def fbx_template_def_light(scene, settings, override_defaults=None, nbr_users=0):
+    gscale = settings.global_scale
     props = {
         b"LightType": (0, "p_enum"),  # Point light.
         b"CastLight": (True, "p_bool"),
@@ -470,14 +472,14 @@ def fbx_template_def_light(gmat, gscale, override_defaults=None, nbr_users=0):
     return FBXTemplate(b"NodeAttribute", b"KFbxLight", props, nbr_users)
 
 
-def fbx_template_def_camera(gmat, gscale, override_defaults=None, nbr_users=0):
+def fbx_template_def_camera(scene, settings, override_defaults=None, nbr_users=0):
     props = {}
     if override_defaults is not None:
         props.update(override_defaults)
     return FBXTemplate(b"NodeAttribute", b"KFbxCamera", props, nbr_users)
 
 
-def fbx_template_def_cameraswitcher(gmat, gscale, override_defaults=None, nbr_users=0):
+def fbx_template_def_cameraswitcher(scene, settings, override_defaults=None, nbr_users=0):
     props = {
         b"Color": ((0.8, 0.8, 0.8), "p_color_rgb"),
         b"Camera Index": (1, "p_integer"),
@@ -487,7 +489,7 @@ def fbx_template_def_cameraswitcher(gmat, gscale, override_defaults=None, nbr_us
     return FBXTemplate(b"NodeAttribute", b"KFbxCameraSwitcher", props, nbr_users)
 
 
-def fbx_template_def_geometry(gmat, gscale, override_defaults=None, nbr_users=0):
+def fbx_template_def_geometry(scene, settings, override_defaults=None, nbr_users=0):
     props = {
         b"Color": ((0.8, 0.8, 0.8), "p_color_rgb"),
         b"BBoxMin": ((0.0, 0.0, 0.0), "p_vector_3d"),
@@ -498,7 +500,7 @@ def fbx_template_def_geometry(gmat, gscale, override_defaults=None, nbr_users=0)
     return FBXTemplate(b"Geometry", b"KFbxMesh", props, nbr_users)
 
 
-def fbx_template_def_material(gmat, gscale, override_defaults=None, nbr_users=0):
+def fbx_template_def_material(scene, settings, override_defaults=None, nbr_users=0):
     # WIP...
     props = {
         b"ShadingModel": ("phong", "p_string"),
@@ -519,8 +521,9 @@ def fbx_template_def_material(gmat, gscale, override_defaults=None, nbr_users=0)
         b"DisplacementFactor": (0.0, "p_number"),
         # Phong-specific.
         b"SpecularColor": ((1.0, 1.0, 1.0), "p_color_rgb"),
-        b"SpecularFactor": (0.5, "p_number"),
-        b"Shininess": (50.0, "p_number"),  # Not sure about that name... :/
+        b"SpecularFactor": (0.5 / 2.0, "p_number"),
+        # Not sure about that name,importer use this (but ShininessExponent for tex prop name!) :/
+        b"Shininess": ((50.0 - 1.0) / 5.10, "p_number"),
         b"ReflectionColor": ((1.0, 1.0, 1.0), "p_color_rgb"),
         b"RefectionFactor": (0.0, "p_number"),
     }
@@ -529,13 +532,13 @@ def fbx_template_def_material(gmat, gscale, override_defaults=None, nbr_users=0)
     return FBXTemplate(b"Material", b"KFbxSurfacePhong", props, nbr_users)
 
 
-def fbx_template_def_texture_file(gmat, gscale, override_defaults=None, nbr_users=0):
+def fbx_template_def_texture_file(scene, settings, override_defaults=None, nbr_users=0):
     # WIP...
     # XXX Not sure about all names!
     props = {
         b"TextureTypeUse": (0, "p_enum"),  # Standard.
         b"AlphaSource": (2, "p_enum"),  # Black (i.e. texture's alpha), XXX name guessed!.
-        b"Alpha": (1.0, "p_number"),
+        b"Texture alpha": (1.0, "p_number"),
         b"PremultiplyAlpha": (False, "p_bool"),
         b"CurrentTextureBlendMode": (0, "p_enum"),  # Translucent, assuming this means "Alpha over"!
         b"CurrentMappingType": (1, "p_enum"),  # Planar.
@@ -545,14 +548,44 @@ def fbx_template_def_texture_file(gmat, gscale, override_defaults=None, nbr_user
         b"Translation": ((0.0, 0.0, 0.0), "p_vector_3d"),
         b"Rotation": ((0.0, 0.0, 0.0), "p_vector_3d"),
         b"Scaling": ((1.0, 1.0, 1.0), "p_vector_3d"),
-        b"RotationPivot": ((0.0, 0.0, 0.0), "p_vector_3d"),  # Assuming (0.0, 0.0, 0.0) is the center of picture...
-        b"ScalingPivot": ((0.0, 0.0, 0.0), "p_vector_3d"),  # Assuming (0.0, 0.0, 0.0) is the center of picture...
+        b"TextureRotationPivot": ((0.0, 0.0, 0.0), "p_vector_3d"),
+        b"TextureScalingPivot": ((0.0, 0.0, 0.0), "p_vector_3d"),
+        # Not sure about those two... At least, UseMaterial should always be ON imho.
+        b"UseMaterial": (True, "p_bool"),
+        b"UseMipMap": (False, "p_bool"),
     }
     if override_defaults is not None:
         props.update(override_defaults)
     return FBXTemplate(b"Texture", b"KFbxFileTexture", props, nbr_users)
- 
 
+
+def fbx_template_def_video(scene, settings, override_defaults=None, nbr_users=0):
+    # WIP...
+    props = {
+        # All pictures.
+        b"Width": (0, "p_integer"),
+        b"Height": (0, "p_integer"),
+        b"Path": ("", "p_string_url"),
+        b"AccessMode": (0, "p_enum"),  # Disk (0=Disk, 1=Mem, 2=DiskAsync).
+        # All videos.
+        b"StartFrame": (0, "p_integer"),
+        b"StopFrame": (0, "p_integer"),
+        b"Offset": (0, "p_timestamp"),
+        b"PlaySpeed": (1.0, "p_number"),
+        b"FreeRunning": (False, "p_bool"),
+        b"Loop": (False, "p_bool"),
+        b"InterlaceMode": (0, "p_enum"),  # None, i.e. progressive.
+        # Image sequences.
+        b"ImageSequence": (False, "p_bool"),
+        b"ImageSequenceOffset": (0, "p_integer"),
+        b"FrameRate": (scene.render.fps / scene.render.fps_base, "p_number"),
+        b"LastFrame": (0, "p_integer"),
+    }
+    if override_defaults is not None:
+        props.update(override_defaults)
+    return FBXTemplate(b"Video", b"KFbxVideo", props, nbr_users)
+
+ 
 def fbx_template_def_pose(gmat, gscale, override_defaults=None, nbr_users=0):
     props = {}
     if override_defaults is not None:
@@ -967,24 +1000,49 @@ def fbx_data_material_elements(root, mat, scene_data):
     """
     if mat_type == b"phong":
         elem_props_template_set(tmpl, props, "p_color_rgb", b"SpecularColor", mat.specular_color)
-        elem_props_template_set(tmpl, props, "p_number", b"SpecularFactor", mat.specular_intensity)
-        elem_props_template_set(tmpl, props, "p_number", b"Shininess", mat.specular_hardness)  # Check this is valid!
+        elem_props_template_set(tmpl, props, "p_number", b"SpecularFactor", mat.specular_intensity / 2.0)
+        elem_props_template_set(tmpl, props, "p_number", b"Shininess", (mat.specular_hardness - 1.0) / 5.10)
         elem_props_template_set(tmpl, props, "p_color_rgb", b"ReflectionColor", mat.mirror_color)
         elem_props_template_set(tmpl, props, "p_number", b"RefectionFactor",
                                 mat.raytrace_mirror.reflect_factor if mat.raytrace_mirror.use else 0.0)
 
 
+def _gen_vid_path(img, scene_data):
+    msetts = scene_data.settings.media_settings
+    fname_rel = bpy_extras.io_utils.path_reference(img.filepath, msetts.base_src, msetts.base_dst, msetts.path_mode,
+                                                   msetts.subdir, msetts.copy_set, img.library)
+    fname_strip = bpy.path.basename(fname_rel)
+
+    if scene_data.settings.embed_textures:
+
 def fbx_data_texture_file_elements(root, tex, scene_data):
     """
     Write the (file) Texture data block.
     """
-    tex_key = scene_data.data_textures[tex]
+    # XXX All this is very fuzzy to me currently...
+    #     Textures do not seem to use properties as much as they could.
+    #     And I found even in 7.4 files VideoTexture used for mere png's... :/
+    #     For now assuming most logical and simple stuff.
 
-    fbx_tex = elem_data_single_int64(root, b"Texture", get_fbxuid_from_key(lamp_key))
+    tex_key = scene_data.data_textures[tex]
+    img = tex.texture.image
+
+    fbx_tex = elem_data_single_int64(root, b"Texture", get_fbxuid_from_key(tex_key))
     fbx_tex.add_string(fbx_name_class(tex.name.encode(), b"Texture"))
     fbx_tex.add_string(b"")
 
+    elem_data_single_string(fbx_tex, b"Type", b"TextureVideoClip")
     elem_data_single_int32(fbx_tex, b"Version", FBX_TEXTURE_VERSION)
+    elem_data_single_string(fbx_tex, b"TextureName", fbx_name_class(tex.name.encode(), b"Texture"))
+    elem_data_single_string(fbx_tex, b"Media", fbx_name_class(tex.name.encode(), b"Texture"))
+    elem_data_single_string(fbx_tex, b"TextureName", fbx_name_class(tex.name.encode(), b"Texture"))
+    elem_data_single_string(fbx_tex, b"TextureName", fbx_name_class(tex.name.encode(), b"Texture"))
+
+            ["Properties70", [], "", [
+                ["P", ["UseMaterial", "bool", "", "", 1], "SSSSI", []]]],
+            ["", ["HDR::Video"], "S", []],
+            ["FileName", ["E:/HyperspaceMadness_UE3/SpaceMadness/Art/demos/DX11_Examples/Minion_LOD2_DX11_1024_Animation_Ram.fbm/Global_Illumination.png"], "S", []],
+            ["RelativeFilename", ["Minion_LOD2_DX11_1024_Animation_Ram.fbm\\Global_Illumination.png"], "S", []],
 
     tmpl = scene_data.templates[b"TextureFile"]
     props = elem_properties(fbx_tex)
@@ -1031,7 +1089,23 @@ def fbx_data_texture_file_elements(root, tex, scene_data):
             ["ModelUVScaling", [1.0, 1.0], "DD", []],
             ["Texture_Alpha_Source", ["None"], "S", []],
             ["Cropping", [0, 0, 0, 0], "IIII", []]]],
+
  
+def fbx_data_video_elements(root, vid, scene_data):
+    """
+    Write the actual image data block.
+    """
+    # TODO: this can embed the actual image/video data!
+
+        ["Video", [1172616112, "SuitA_Normal1::Video", "Clip"], "LSS", [
+            ["Type", ["Clip"], "S", []],
+            ["Properties70", [], "", [
+                ["P", ["Path", "KString", "XRefUrl", "", "E:/HyperspaceMadness_UE3/SpaceMadness/Art/demos/DX11_Examples/Minion_LOD2_DX11_1024_Animation_Ram.fbm/MinionSuitA_Normal.png"], "SSSSS", []]]],
+            ["UseMipMap", [0], "I", []],
+            ["Filename", ["E:/HyperspaceMadness_UE3/SpaceMadness/Art/demos/DX11_Examples/Minion_LOD2_DX11_1024_Animation_Ram.fbm/MinionSuitA_Normal.png"], "S", []],
+            ["RelativeFilename", ["Minion_LOD2_DX11_1024_Animation_Ram.fbm\\MinionSuitA_Normal.png"], "S", []],
+            ["Content", ["<byte_array>"]]]]
+
 
 def fbx_data_object_elements(root, obj, scene_data):
     """
@@ -1113,7 +1187,7 @@ FBXData = namedtuple("FBXData", (
     "templates", "templates_users",
     "settings", "scene", "objects",
     "data_lamps", "data_cameras", "data_meshes",
-    "data_world", "data_materials", "data_textures",
+    "data_world", "data_materials", "data_textures", "data_videos",
 ))
 
 
@@ -1143,12 +1217,10 @@ def fbx_data_from_scene(scene, settings):
     """
     Do some pre-processing over scene's data...
     """
-    gmat = settings.global_matrix
-    gscale = settings.global_scale
     objtypes = settings.object_types
 
     templates = {
-        b"GlobalSettings": fbx_template_def_globalsettings(gmat, gscale, nbr_users=1),
+        b"GlobalSettings": fbx_template_def_globalsettings(scene, settings, nbr_users=1),
     }
 
     # This is rather simple for now, maybe we could end generating templates with most-used values
@@ -1177,56 +1249,70 @@ def fbx_data_from_scene(scene, settings):
 
     # Note FBX textures also holds their mapping info.
     data_textures = {}
+    # FbxVideo also used to store static images...
+    data_videos = {}
     # For now, do not use world textures, don't think they can be linked to anything FBX wise...
     for mat in data_materials.keys():
         for tex in material.texture_slots:
             # For now, only consider image textures.
             # Note FBX does has support for procedural, but this is not portable at all (opaque blob),
             # so not useful for us.
-            if tex.texture.type not in {'IMAGE', 'ENVIRONMENT_MAP'}:
+            # TODO I think ENVIRONMENT_MAP should be usable in FBX as well, but for now let it aside.
+            #if tex.texture.type not in {'IMAGE', 'ENVIRONMENT_MAP'}:
+            if tex.texture.type not in {'IMAGE'}:
+                continue
+            img = tex.texture.image
+            if img is None:
                 continue
             # Find out whether we can actually use this texture for this material, in FBX context.
             tex_fbx_props = fbx_mat_properties_from_texture(tex)
             if not tex_fbx_props:
                 continue
-            if tex not in data_textures:
-                data_textures[tex] = (get_blenderID_key(tex.name), {mat: tex_fbx_props})
-            else:
+            if tex in data_textures:
                 data_textures[tex][1][mat] = tex_fbx_props
+            else:
+                data_textures[tex] = (get_blenderID_key(tex.name), {mat: tex_fbx_props})
+            if img in data_videos:
+                data_videos[img][1].append(tex)
+            else:
+                data_videos[img] = (get_blenderID_key(img.name), [tex])
 
     if objects:
         # We use len(object) + len(data_cameras) because of the CameraSwitcher objects...
-        templates[b"Model"] = fbx_template_def_model(gmat, gscale, nbr_users=len(objects) + len(data_cameras))
+        templates[b"Model"] = fbx_template_def_model(scene, settings, nbr_users=len(objects) + len(data_cameras))
 
     if data_lamps:
-        templates[b"Light"] = fbx_template_def_light(gmat, gscale, nbr_users=len(data_lamps))
+        templates[b"Light"] = fbx_template_def_light(scene, settings, nbr_users=len(data_lamps))
 
     if data_cameras:
         nbr = len(data_cameras)
-        templates[b"Camera"] = fbx_template_def_camera(gmat, gscale, nbr_users=nbr)
-        templates[b"CameraSwitcher"] = fbx_template_def_cameraswitcher(gmat, gscale, nbr_users=nbr)
+        templates[b"Camera"] = fbx_template_def_camera(scene, settings, nbr_users=nbr)
+        templates[b"CameraSwitcher"] = fbx_template_def_cameraswitcher(scene, settings, nbr_users=nbr)
 
     if data_meshes:
-        templates[b"Geometry"] = fbx_template_def_geometry(gmat, gscale, nbr_users=len(data_meshes))
+        templates[b"Geometry"] = fbx_template_def_geometry(scene, settings, nbr_users=len(data_meshes))
 
     # No world support in FBX...
     """
     if data_world:
-        templates[b"World"] = fbx_template_def_world(gmat, gscale, nbr_users=len(data_world))
+        templates[b"World"] = fbx_template_def_world(scene, settings, nbr_users=len(data_world))
     """
 
     if data_materials:
-        templates[b"Material"] = fbx_template_def_material(gmat, gscale, nbr_users=len(data_materials))
+        templates[b"Material"] = fbx_template_def_material(scene, settings, nbr_users=len(data_materials))
 
     if data_textures:
-        templates[b"TextureFile"] = fbx_template_def_texture_file(gmat, gscale, nbr_users=len(data_textures))
+        templates[b"TextureFile"] = fbx_template_def_texture_file(scene, settings, nbr_users=len(data_textures))
+
+    if data_videos:
+        templates[b"Video"] = fbx_template_def_video(scene, settings, nbr_users=len(data_videos))
 
     templates_users = sum(tmpl.nbr_users for tmpl in templates.values())
     return FBXData(
         templates, templates_users,
         settings, scene, objects,
         data_lamps, data_cameras, data_meshes,
-        data_world, data_materials, data_textures,
+        data_world, data_materials, data_textures, data_videos,
     )
 
 
@@ -1364,6 +1450,15 @@ def fbx_objects_elements(root, scene_data):
     for obj in scene_data.objects.keys():
         fbx_data_object_elements(objects, obj, scene_data)
 
+    for mat in scene_data.data_materials.keys():
+        fbx_data_material_elements(objects, mat, scene_data)
+
+    for tex in scene_data.data_textures.keys():
+        fbx_data_texture_file_elements(objects, tex, scene_data)
+
+    for vid in scene_data.data_videos.keys():
+        fbx_data_video_elements(objects, vid, scene_data)
+
 
 def fbx_connections_elements(root, scene_data):
     """
@@ -1395,17 +1490,21 @@ def fbx_connections_elements(root, scene_data):
             mesh_key = scene_data.data_meshes[obj.data]
             elem_connection_oo(connections, get_fbxuid_from_key(mesh_key), get_fbxuid_from_key(obj_key))
 
-    for mat, (mat_key, objs) in scene_data.materials.items():
+    for mat, (mat_key, objs) in scene_data.data_materials.items():
         for obj in objs:
             obj_key = scene_data.data_objects[obj]
             elem_connection_oo(connections, get_fbxuid_from_key(mat_key), get_fbxuid_from_key(obj_key))
 
-    for tex, (tex_key, mats) in scene_data.textures.items():
+    for tex, (tex_key, mats) in scene_data.data_textures.items():
         for mat, fbx_mat_props in mats.items():
             mat_key = scene_data.data_materials[mat]
             for fbx_prop in fbx_mat_props:
                 elem_connection_op(connections, get_fbxuid_from_key(tex_key), get_fbxuid_from_key(mat_key), fbx_prop)
 
+    for vid, (vid_key, texs) in scene_data.data_videos.items():
+        for tex in texs:
+            tex_key = scene_data.data_textures[tex]
+            elem_connection_oo(connections, get_fbxuid_from_key(vid_key), get_fbxuid_from_key(tex_key))
 
 
 def fbx_takes_elements(root, scene_data):
@@ -1416,11 +1515,15 @@ def fbx_takes_elements(root, scene_data):
 
 
 ##### "Main" functions. #####
+FBXSettingsMedia = namedtuple("FBXSettingsMedia", (
+    "path_mode", "base_src", "base_dst", "subdir",
+    "embed_textures", "copy_set",
+))
 FBXSettings = namedtuple("FBXSettings", (
     "global_matrix", "global_scale", "context_objects", "object_types", "use_mesh_modifiers",
     "mesh_smooth_type", "use_mesh_edges", "use_armature_deform_only",
     "use_anim", "use_anim_optimize", "anim_optimize_precision", "use_anim_action_all", "use_default_take",
-    "use_metadata", "path_mode",
+    "use_metadata", "media_settings",
 ))
 
 # This func can be called with just the filepath
@@ -1439,6 +1542,7 @@ def save_single(operator, scene, filepath="",
                 path_mode='AUTO',
                 use_mesh_edges=True,
                 use_default_take=True,
+                embed_textures=False,
                 **kwargs
                 ):
 
@@ -1449,24 +1553,26 @@ def save_single(operator, scene, filepath="",
 
     global_scale = global_matrix.median_scale
 
+    media_settings = FBXSettingsMedia(
+        path_mode,
+        os.path.dirname(bpy.data.filepath),  # base_src
+        os.path.dirname(filepath),  # base_dst
+        os.path.basename(filepath) + ".fbm",  # subdir, local dir where to put images (medias), using FBX conventions.
+        embed_textures,
+        set(),  # copy_set
+    )
+
     settings = FBXSettings(
         global_matrix, global_scale, context_objects, object_types, use_mesh_modifiers,
         mesh_smooth_type, use_mesh_edges, use_armature_deform_only,
         use_anim, use_anim_optimize, anim_optimize_precision, use_anim_action_all, use_default_take,
-        use_metadata, path_mode,
+        use_metadata, media_settings,
     )
 
     import bpy_extras.io_utils
 
     print('\nFBX export starting... %r' % filepath)
     start_time = time.process_time()
-
-    # Use this for working out paths relative to the export location
-    base_src = os.path.dirname(bpy.data.filepath)
-    base_dst = os.path.dirname(filepath)
-
-    # collect images to copy
-    copy_set = set()
 
     # Generate some data about exported scene...
     scene_data = fbx_data_from_scene(scene, settings)
@@ -1495,8 +1601,9 @@ def save_single(operator, scene, filepath="",
     # And we are down, we can write the whole thing!
     encode_bin.write(filepath, root, FBX_VERSION)
 
-    # copy all collected files.
-    bpy_extras.io_utils.path_reference_copy(copy_set)
+    # copy all collected files, if we did not embed them.
+    if not media_settings.embed_textures:
+        bpy_extras.io_utils.path_reference_copy(media_settings.copy_set)
 
     print('export finished in %.4f sec.' % (time.process_time() - start_time))
     return {'FINISHED'}
