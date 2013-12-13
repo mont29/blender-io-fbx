@@ -33,6 +33,7 @@ import itertools
 from itertools import zip_longest
 
 import bpy
+import bpy_extras
 from mathutils import Vector, Matrix
 
 from . import encode_bin, data_types
@@ -172,11 +173,6 @@ def get_blender_camera_keys(cam):
     """Return cam + cam switcher keys."""
     key = get_blenderID_key(cam)
     return key, key + "_switcher", key + "_switcher_object"
-
-
-def get_blender_material_key(mat):
-    """Materials are actually (mat, tex) pairs."""
-    return get_blenderID_key(mat[0]) + ";" + get_blenderID_key(mat[1])
 
 
 ##### Element generators. #####
@@ -965,9 +961,9 @@ def fbx_data_material_elements(root, mat, scene_data):
     """
     Write the Material data block.
     """
-    world = next(iter(scene_data.world.keys()))
+    world = next(iter(scene_data.data_world.keys()))
 
-    mat_key = scene_data.data_materials[mat]
+    mat_key, _objs = scene_data.data_materials[mat]
     # Approximation...
     mat_type = b"phong" if mat.specular_shader in {'COOKTORR', 'PHONG', 'BLINN'} else b"lambert"
 
@@ -1011,7 +1007,7 @@ def _gen_vid_path(img, scene_data):
     msetts = scene_data.settings.media_settings
     fname_rel = bpy_extras.io_utils.path_reference(img.filepath, msetts.base_src, msetts.base_dst, msetts.path_mode,
                                                    msetts.subdir, msetts.copy_set, img.library)
-    fname_abs = os.path.normpath(os.path.abspath(os.path.join(msetts.base_dst, fname)))
+    fname_abs = os.path.normpath(os.path.abspath(os.path.join(msetts.base_dst, fname_rel)))
     return fname_abs, fname_rel
 
 
@@ -1024,7 +1020,7 @@ def fbx_data_texture_file_elements(root, tex, scene_data):
     #     And I found even in 7.4 files VideoTexture used for mere png's... :/
     #     For now assuming most logical and simple stuff.
 
-    tex_key = scene_data.data_textures[tex]
+    tex_key, _mats = scene_data.data_textures[tex]
     img = tex.texture.image
     fname_abs, fname_rel = _gen_vid_path(img, scene_data)
 
@@ -1041,7 +1037,7 @@ def fbx_data_texture_file_elements(root, tex, scene_data):
 
     alpha_source = 0  # None
     if img.use_alpha:
-        if img.use_calculate_alpha:
+        if tex.texture.use_calculate_alpha:
             alpha_source = 1  # RGBIntensity as alpha.
         else:
             alpha_source = 2  # Black, i.e. alpha channel.
@@ -1079,26 +1075,27 @@ def fbx_data_video_elements(root, vid, scene_data):
     """
     Write the actual image data block.
     """
-    vid_key = scene_data.data_videos[vid]
+    vid_key, _texs = scene_data.data_videos[vid]
     fname_abs, fname_rel = _gen_vid_path(vid, scene_data)
 
     fbx_vid = elem_data_single_int64(root, b"Video", get_fbxuid_from_key(vid_key))
     fbx_vid.add_string(fbx_name_class(vid.name.encode(), b"Video"))
     fbx_vid.add_string(b"Clip")
 
-    elem_data_single_string(fbx_tex, b"Type", b"Clip")
+    elem_data_single_string(fbx_vid, b"Type", b"Clip")
     # XXX No Version???
-    elem_data_single_string_unicode(fbx_tex, b"FileName", fname_abs)
-    elem_data_single_string_unicode(fbx_tex, b"RelativeFilename", fname_rel)
+    elem_data_single_string_unicode(fbx_vid, b"FileName", fname_abs)
+    elem_data_single_string_unicode(fbx_vid, b"RelativeFilename", fname_rel)
 
     if scene_data.settings.media_settings.embed_textures:
         try:
             with open(vid.filepath, 'b') as f:
-                elem_data_single_byte_array(fbx_tex, b"Content", f.read())
+                elem_data_single_byte_array(fbx_vid, b"Content", f.read())
         except Exception as e:
             print("WARNING: embeding file {} failed ({})".format(vid.filepath, e))
+            elem_data_single_byte_array(fbx_vid, b"Content", b"")
     else:
-        elem_data_single_byte_array(fbx_tex, b"Content", b"")
+        elem_data_single_byte_array(fbx_vid, b"Content", b"")
 
 
 def fbx_data_object_elements(root, obj, scene_data):
@@ -1248,7 +1245,9 @@ def fbx_data_from_scene(scene, settings):
     data_videos = {}
     # For now, do not use world textures, don't think they can be linked to anything FBX wise...
     for mat in data_materials.keys():
-        for tex in material.texture_slots:
+        for tex in mat.texture_slots:
+            if tex is None:
+                continue
             # For now, only consider image textures.
             # Note FBX does has support for procedural, but this is not portable at all (opaque blob),
             # so not useful for us.
@@ -1266,11 +1265,11 @@ def fbx_data_from_scene(scene, settings):
             if tex in data_textures:
                 data_textures[tex][1][mat] = tex_fbx_props
             else:
-                data_textures[tex] = (get_blenderID_key(tex.name), {mat: tex_fbx_props})
+                data_textures[tex] = (get_blenderID_key(tex), {mat: tex_fbx_props})
             if img in data_videos:
                 data_videos[img][1].append(tex)
             else:
-                data_videos[img] = (get_blenderID_key(img.name), [tex])
+                data_videos[img] = (get_blenderID_key(img), [tex])
 
     if objects:
         # We use len(object) + len(data_cameras) because of the CameraSwitcher objects...
@@ -1487,18 +1486,18 @@ def fbx_connections_elements(root, scene_data):
 
     for mat, (mat_key, objs) in scene_data.data_materials.items():
         for obj in objs:
-            obj_key = scene_data.data_objects[obj]
+            obj_key = scene_data.objects[obj]
             elem_connection_oo(connections, get_fbxuid_from_key(mat_key), get_fbxuid_from_key(obj_key))
 
     for tex, (tex_key, mats) in scene_data.data_textures.items():
         for mat, fbx_mat_props in mats.items():
-            mat_key = scene_data.data_materials[mat]
+            mat_key, _objs = scene_data.data_materials[mat]
             for fbx_prop in fbx_mat_props:
                 elem_connection_op(connections, get_fbxuid_from_key(tex_key), get_fbxuid_from_key(mat_key), fbx_prop)
 
     for vid, (vid_key, texs) in scene_data.data_videos.items():
         for tex in texs:
-            tex_key = scene_data.data_textures[tex]
+            tex_key, _texs = scene_data.data_textures[tex]
             elem_connection_oo(connections, get_fbxuid_from_key(vid_key), get_fbxuid_from_key(tex_key))
 
 
