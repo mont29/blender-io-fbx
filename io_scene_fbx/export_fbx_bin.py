@@ -1011,9 +1011,9 @@ def _gen_vid_path(img, scene_data):
     msetts = scene_data.settings.media_settings
     fname_rel = bpy_extras.io_utils.path_reference(img.filepath, msetts.base_src, msetts.base_dst, msetts.path_mode,
                                                    msetts.subdir, msetts.copy_set, img.library)
-    fname_strip = bpy.path.basename(fname_rel)
+    fname_abs = os.path.normpath(os.path.abspath(os.path.join(msetts.base_dst, fname)))
+    return fname_abs, fname_rel
 
-    if scene_data.settings.embed_textures:
 
 def fbx_data_texture_file_elements(root, tex, scene_data):
     """
@@ -1026,6 +1026,7 @@ def fbx_data_texture_file_elements(root, tex, scene_data):
 
     tex_key = scene_data.data_textures[tex]
     img = tex.texture.image
+    fname_abs, fname_rel = _gen_vid_path(img, scene_data)
 
     fbx_tex = elem_data_single_int64(root, b"Texture", get_fbxuid_from_key(tex_key))
     fbx_tex.add_string(fbx_name_class(tex.name.encode(), b"Texture"))
@@ -1034,77 +1035,70 @@ def fbx_data_texture_file_elements(root, tex, scene_data):
     elem_data_single_string(fbx_tex, b"Type", b"TextureVideoClip")
     elem_data_single_int32(fbx_tex, b"Version", FBX_TEXTURE_VERSION)
     elem_data_single_string(fbx_tex, b"TextureName", fbx_name_class(tex.name.encode(), b"Texture"))
-    elem_data_single_string(fbx_tex, b"Media", fbx_name_class(tex.name.encode(), b"Texture"))
-    elem_data_single_string(fbx_tex, b"TextureName", fbx_name_class(tex.name.encode(), b"Texture"))
-    elem_data_single_string(fbx_tex, b"TextureName", fbx_name_class(tex.name.encode(), b"Texture"))
+    elem_data_single_string(fbx_tex, b"Media", fbx_name_class(img.name.encode(), b"Video"))
+    elem_data_single_string_unicode(fbx_tex, b"FileName", fname_abs)
+    elem_data_single_string_unicode(fbx_tex, b"RelativeFilename", fname_rel)
 
-            ["Properties70", [], "", [
-                ["P", ["UseMaterial", "bool", "", "", 1], "SSSSI", []]]],
-            ["", ["HDR::Video"], "S", []],
-            ["FileName", ["E:/HyperspaceMadness_UE3/SpaceMadness/Art/demos/DX11_Examples/Minion_LOD2_DX11_1024_Animation_Ram.fbm/Global_Illumination.png"], "S", []],
-            ["RelativeFilename", ["Minion_LOD2_DX11_1024_Animation_Ram.fbm\\Global_Illumination.png"], "S", []],
+    alpha_source = 0  # None
+    if img.use_alpha:
+        if img.use_calculate_alpha:
+            alpha_source = 1  # RGBIntensity as alpha.
+        else:
+            alpha_source = 2  # Black, i.e. alpha channel.
+    # BlendMode not useful for now, only affects layered textures afaics.
+    mapping = 0  # None.
+    if tex.texture_coords in {'ORCO'}:  # XXX Others?
+        if tex.mapping in {'FLAT'}:
+            mapping = 1  # Planar
+        elif tex.mapping in {'CUBE'}:
+            mapping = 4  # Box
+        elif tex.mapping in {'TUBE'}:
+            mapping = 3  # Cylindrical
+        elif tex.mapping in {'SPHERE'}:
+            mapping = 2  # Spherical
+    elif tex.texture_coords in {'UV'}:
+        mapping = 6  # UV
+    wrap_mode = 1  # Clamp
+    if tex.texture.extension in {'REPEAT'}:
+        wrap_mode = 0  # Repeat
 
     tmpl = scene_data.templates[b"TextureFile"]
     props = elem_properties(fbx_tex)
-    elem_props_template_set(tmpl, props, "p_enum", b"LightType", FBX_LIGHT_TYPES[lamp.type])
-    elem_props_template_set(tmpl, props, "p_bool", b"CastLight", do_light)
-    elem_props_template_set(tmpl, props, "p_color_rgb", b"Color", lamp.color)
-    elem_props_template_set(tmpl, props, "p_number", b"Intensity", lamp.energy * 100.0)
-    elem_props_template_set(tmpl, props, "p_enum", b"DecayType", decay_type)
-    elem_props_template_set(tmpl, props, "p_number", b"DecayStart", lamp.distance * gscale)
-    elem_props_template_set(tmpl, props, "p_bool", b"CastShadows", do_shadow)
-    elem_props_template_set(tmpl, props, "p_color_rgb", b"ShadowColor", shadow_color)
-    if lamp.type in {'SPOT'}:
-        elem_props_template_set(tmpl, props, "p_number", b"OuterAngle", math.degrees(lamp.spot_size))
-        elem_props_template_set(tmpl, props, "p_number", b"InnerAngle",
-                                math.degrees(lamp.spot_size * (1.0 - lamp.spot_blend)))
-
-
-        b"TextureTypeUse": (0, "p_enum"),  # Standard.
-        b"AlphaSource": (2, "p_enum"),  # Black (i.e. texture's alpha), XXX name guessed!.
-        b"Alpha": (1.0, "p_number"),
-        b"PremultiplyAlpha": (False, "p_bool"),
-        b"CurrentTextureBlendMode": (0, "p_enum"),  # Translucent, assuming this means "Alpha over"!
-        b"CurrentMappingType": (1, "p_enum"),  # Planar.
-        b"WrapModeU": (0, "p_enum"),  # Repeat.
-        b"WrapModeV": (0, "p_enum"),  # Repeat.
-        b"UVSwap": (False, "p_bool"),
-        b"Translation": ((0.0, 0.0, 0.0), "p_vector_3d"),
-        b"Rotation": ((0.0, 0.0, 0.0), "p_vector_3d"),
-        b"Scaling": ((1.0, 1.0, 1.0), "p_vector_3d"),
-        b"RotationPivot": ((0.0, 0.0, 0.0), "p_vector_3d"),  # Assuming (0.0, 0.0, 0.0) is the center of picture...
-        b"ScalingPivot": ((0.0, 0.0, 0.0), "p_vector_3d"),  # Assuming (0.0, 0.0, 0.0) is the center of picture...
-
-
-        ["Texture", [984120400, "HDR::Texture", ""], "LSS", [
-            ["Type", ["TextureVideoClip"], "S", []],
-            ["Version", [202], "I", []],
-            ["TextureName", ["HDR::Texture"], "S", []],
-            ["Properties70", [], "", [
-                ["P", ["UseMaterial", "bool", "", "", 1], "SSSSI", []]]],
-            ["Media", ["HDR::Video"], "S", []],
-            ["FileName", ["E:/HyperspaceMadness_UE3/SpaceMadness/Art/demos/DX11_Examples/Minion_LOD2_DX11_1024_Animation_Ram.fbm/Global_Illumination.png"], "S", []],
-            ["RelativeFilename", ["Minion_LOD2_DX11_1024_Animation_Ram.fbm\\Global_Illumination.png"], "S", []],
-            ["ModelUVTranslation", [0.0, 0.0], "DD", []],
-            ["ModelUVScaling", [1.0, 1.0], "DD", []],
-            ["Texture_Alpha_Source", ["None"], "S", []],
-            ["Cropping", [0, 0, 0, 0], "IIII", []]]],
+    elem_props_template_set(tmpl, props, "p_enum", b"AlphaSource", alpha_source)
+    elem_props_template_set(tmpl, props, "p_bool", b"PremultiplyAlpha",
+                            img.alpha_mode in {'STRAIGHT'})  # Or is it PREMUL?
+    elem_props_template_set(tmpl, props, "p_enum", b"CurrentMappingType", mapping)
+    elem_props_template_set(tmpl, props, "p_enum", b"WrapModeU", wrap_mode)
+    elem_props_template_set(tmpl, props, "p_enum", b"WrapModeV", wrap_mode)
+    elem_props_template_set(tmpl, props, "p_vector_3d", b"Translation", tex.offset)
+    elem_props_template_set(tmpl, props, "p_vector_3d", b"Scaling", tex.scale)
+    elem_props_template_set(tmpl, props, "p_bool", b"UseMipMap", tex.texture.use_mipmap)
 
  
 def fbx_data_video_elements(root, vid, scene_data):
     """
     Write the actual image data block.
     """
-    # TODO: this can embed the actual image/video data!
+    vid_key = scene_data.data_videos[vid]
+    fname_abs, fname_rel = _gen_vid_path(vid, scene_data)
 
-        ["Video", [1172616112, "SuitA_Normal1::Video", "Clip"], "LSS", [
-            ["Type", ["Clip"], "S", []],
-            ["Properties70", [], "", [
-                ["P", ["Path", "KString", "XRefUrl", "", "E:/HyperspaceMadness_UE3/SpaceMadness/Art/demos/DX11_Examples/Minion_LOD2_DX11_1024_Animation_Ram.fbm/MinionSuitA_Normal.png"], "SSSSS", []]]],
-            ["UseMipMap", [0], "I", []],
-            ["Filename", ["E:/HyperspaceMadness_UE3/SpaceMadness/Art/demos/DX11_Examples/Minion_LOD2_DX11_1024_Animation_Ram.fbm/MinionSuitA_Normal.png"], "S", []],
-            ["RelativeFilename", ["Minion_LOD2_DX11_1024_Animation_Ram.fbm\\MinionSuitA_Normal.png"], "S", []],
-            ["Content", ["<byte_array>"]]]]
+    fbx_vid = elem_data_single_int64(root, b"Video", get_fbxuid_from_key(vid_key))
+    fbx_vid.add_string(fbx_name_class(vid.name.encode(), b"Video"))
+    fbx_vid.add_string(b"Clip")
+
+    elem_data_single_string(fbx_tex, b"Type", b"Clip")
+    # XXX No Version???
+    elem_data_single_string_unicode(fbx_tex, b"FileName", fname_abs)
+    elem_data_single_string_unicode(fbx_tex, b"RelativeFilename", fname_rel)
+
+    if scene_data.settings.media_settings.embed_textures:
+        try:
+            with open(vid.filepath, 'b') as f:
+                elem_data_single_byte_array(fbx_tex, b"Content", f.read())
+        except Exception as e:
+            print("WARNING: embeding file {} failed ({})".format(vid.filepath, e))
+    else:
+        elem_data_single_byte_array(fbx_tex, b"Content", b"")
 
 
 def fbx_data_object_elements(root, obj, scene_data):
@@ -1248,6 +1242,7 @@ def fbx_data_from_scene(scene, settings):
                     data_materials[mat] = (get_blenderID_key(mat), [obj])
 
     # Note FBX textures also holds their mapping info.
+    # TODO: Support layers?
     data_textures = {}
     # FbxVideo also used to store static images...
     data_videos = {}
@@ -1553,11 +1548,16 @@ def save_single(operator, scene, filepath="",
 
     global_scale = global_matrix.median_scale
 
+    # Only embed textures in COPY mode!
+    if embed_textures and path_mode != 'COPY':
+        embed_textures = False
+
     media_settings = FBXSettingsMedia(
         path_mode,
         os.path.dirname(bpy.data.filepath),  # base_src
         os.path.dirname(filepath),  # base_dst
-        os.path.basename(filepath) + ".fbm",  # subdir, local dir where to put images (medias), using FBX conventions.
+        # Local dir where to put images (medias), using FBX conventions.
+        os.path.splitext(os.path.basename(filepath))[0] + ".fbm",  # subdir
         embed_textures,
         set(),  # copy_set
     )
