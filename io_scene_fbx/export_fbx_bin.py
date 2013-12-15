@@ -30,7 +30,7 @@ import time
 import collections
 from collections import namedtuple
 import itertools
-from itertools import zip_longest
+from itertools import zip_longest, chain
 
 import bpy
 import bpy_extras
@@ -823,14 +823,10 @@ def fbx_data_mesh_elements(root, me, scene_data):
         elem_data_single_string(lay_nor, b"ReferenceInformationType", b"IndexToDirect")
 
         ln2idx = tuple(set(_nortuples_gen(t_ln)))
-        ln = array.array(data_types.ARRAY_FLOAT64, sum(ln2idx, ()))  # Flatten again...
-        elem_data_single_float64_array(lay_nor, b"Normals", ln);
-        del ln
+        elem_data_single_float64_array(lay_nor, b"Normals", chain(*ln2idx))
 
         ln2idx = {nor: idx for idx, nor in enumerate(ln2idx)}
-        li = array.array(data_types.ARRAY_INT32, (ln2idx[n] for n in _nortuples_gen(t_ln)))
-        elem_data_single_int32_array(lay_nor, b"NormalIndex", li);
-        del li
+        elem_data_single_int32_array(lay_nor, b"NormalIndex", (ln2idx[n] for n in _nortuples_gen(t_ln)))
 
         del ln2idx
         del t_ln
@@ -845,7 +841,7 @@ def fbx_data_mesh_elements(root, me, scene_data):
         elem_data_single_string(lay_nor, b"Name", b"")
         elem_data_single_string(lay_nor, b"MappingInformationType", b"ByPolygonVertex")
         elem_data_single_string(lay_nor, b"ReferenceInformationType", b"Direct")
-        elem_data_single_float64_array(lay_nor, b"Normals", t_ln);
+        elem_data_single_float64_array(lay_nor, b"Normals", t_ln)
         del t_ln
         me.free_normals_split()
 
@@ -896,14 +892,10 @@ def fbx_data_mesh_elements(root, me, scene_data):
             elem_data_single_string(lay_vcol, b"ReferenceInformationType", b"IndexToDirect")
 
             col2idx = tuple(set(_coltuples_gen(t_lc)))
-            lc = array.array(data_types.ARRAY_FLOAT64, sum(col2idx, ()))  # Flatten again...
-            elem_data_single_float64_array(lay_vcol, b"Colors", lc);
-            del lc
+            elem_data_single_float64_array(lay_vcol, b"Colors", chain(*col2idx))  # Flatten again...
 
             col2idx = {col: idx for idx, col in enumerate(col2idx)}
-            li = array.array(data_types.ARRAY_INT32, (col2idx[c] for c in _coltuples_gen(t_lc)))
-            elem_data_single_int32_array(lay_vcol, b"ColorIndex", li);
-            del li
+            elem_data_single_int32_array(lay_vcol, b"ColorIndex", (col2idx[c] for c in _coltuples_gen(t_lc)));
             del col2idx
         del t_lc
         del _coltuples_gen
@@ -926,14 +918,10 @@ def fbx_data_mesh_elements(root, me, scene_data):
             elem_data_single_string(lay_uv, b"ReferenceInformationType", b"IndexToDirect")
 
             uv2idx = tuple(set(_uvtuples_gen(t_luv)))
-            luv = array.array(data_types.ARRAY_FLOAT64, sum(uv2idx, ()))  # Flatten again...
-            elem_data_single_float64_array(lay_uv, b"UV", luv);
-            del luv
+            elem_data_single_float64_array(lay_uv, b"UV", chain(*uv2idx))  # Flatten again...
 
             uv2idx = {uv: idx for idx, uv in enumerate(uv2idx)}
-            li = array.array(data_types.ARRAY_INT32, (uv2idx[uv] for uv in _uvtuples_gen(t_luv)))
-            elem_data_single_int32_array(lay_uv, b"UVIndex", li);
-            del li
+            elem_data_single_int32_array(lay_uv, b"UVIndex", (uv2idx[uv] for uv in _uvtuples_gen(t_luv)));
             del uv2idx
         del t_luv
         del _uvtuples_gen
