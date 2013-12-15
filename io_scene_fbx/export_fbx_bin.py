@@ -807,32 +807,47 @@ def fbx_data_mesh_elements(root, me, scene_data):
 
     # Loop normals.
     # NOTE: this is not supported by importer currently.
-    def _nortuples_gen(raw_nors):
-        return zip(*(iter(raw_nors),) * 3)
+    # XXX Official docs says normals should use IndexToDirect,
+    #     but this does not seem well supported by apps currently...
+    if 0:
+        def _nortuples_gen(raw_nors):
+            return zip(*(iter(raw_nors),) * 3)
 
-    me.calc_normals_split()
-    t_ln = array.array(data_types.ARRAY_FLOAT64, [0.0] * len(me.loops) * 3)
-    me.loops.foreach_get("normal", t_ln)
-    lay_nor = elem_data_single_int32(geom, b"LayerElementNormal", 0)
-    elem_data_single_int32(lay_nor, b"Version", FBX_GEOMETRY_NORMAL_VERSION)
-    elem_data_single_string(lay_nor, b"Name", b"")
-    elem_data_single_string(lay_nor, b"MappingInformationType", b"ByPolygonVertex")
-    elem_data_single_string(lay_nor, b"ReferenceInformationType", b"IndexToDirect")
+        me.calc_normals_split()
+        t_ln = array.array(data_types.ARRAY_FLOAT64, [0.0] * len(me.loops) * 3)
+        me.loops.foreach_get("normal", t_ln)
+        lay_nor = elem_data_single_int32(geom, b"LayerElementNormal", 0)
+        elem_data_single_int32(lay_nor, b"Version", FBX_GEOMETRY_NORMAL_VERSION)
+        elem_data_single_string(lay_nor, b"Name", b"")
+        elem_data_single_string(lay_nor, b"MappingInformationType", b"ByPolygonVertex")
+        elem_data_single_string(lay_nor, b"ReferenceInformationType", b"IndexToDirect")
 
-    ln2idx = tuple(set(_nortuples_gen(t_ln)))
-    ln = array.array(data_types.ARRAY_FLOAT64, sum(ln2idx, ()))  # Flatten again...
-    elem_data_single_float64_array(lay_nor, b"Normals", ln);
-    del ln
+        ln2idx = tuple(set(_nortuples_gen(t_ln)))
+        ln = array.array(data_types.ARRAY_FLOAT64, sum(ln2idx, ()))  # Flatten again...
+        elem_data_single_float64_array(lay_nor, b"Normals", ln);
+        del ln
 
-    ln2idx = {nor: idx for idx, nor in enumerate(ln2idx)}
-    li = array.array(data_types.ARRAY_INT32, (ln2idx[n] for n in _nortuples_gen(t_ln)))
-    elem_data_single_int32_array(lay_nor, b"NormalIndex", li);
-    del li
+        ln2idx = {nor: idx for idx, nor in enumerate(ln2idx)}
+        li = array.array(data_types.ARRAY_INT32, (ln2idx[n] for n in _nortuples_gen(t_ln)))
+        elem_data_single_int32_array(lay_nor, b"NormalIndex", li);
+        del li
 
-    del ln2idx
-    del t_ln
-    del _nortuples_gen
-    me.free_normals_split()
+        del ln2idx
+        del t_ln
+        del _nortuples_gen
+        me.free_normals_split()
+    else:
+        me.calc_normals_split()
+        t_ln = array.array(data_types.ARRAY_FLOAT64, [0.0] * len(me.loops) * 3)
+        me.loops.foreach_get("normal", t_ln)
+        lay_nor = elem_data_single_int32(geom, b"LayerElementNormal", 0)
+        elem_data_single_int32(lay_nor, b"Version", FBX_GEOMETRY_NORMAL_VERSION)
+        elem_data_single_string(lay_nor, b"Name", b"")
+        elem_data_single_string(lay_nor, b"MappingInformationType", b"ByPolygonVertex")
+        elem_data_single_string(lay_nor, b"ReferenceInformationType", b"Direct")
+        elem_data_single_float64_array(lay_nor, b"Normals", t_ln);
+        del t_ln
+        me.free_normals_split()
 
     # TODO: binormal and tangent, to get a complete tspace export.
 
