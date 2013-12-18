@@ -790,18 +790,52 @@ def fbx_data_mesh_elements(root, me, scene_data):
     del t_co
 
     # Polygon indices.
-    # A bit more complicated, as we have to ^-1 last index of each loop.
-    t_vi = array.array(data_types.ARRAY_INT32, [0] * len(me.loops))
-    me.loops.foreach_get("vertex_index", t_vi)
+    #
+    # Note: we have to do edges indices in the same time, as they actually refer to vertices indices from polygons,
+    # why make it simple when you can do it the hard way?
+    # TODO: Lose edges? For now, ignore them.
+    t_pvi = array.array(data_types.ARRAY_INT32, [0] * len(me.loops))
+    t_eli = array.array(data_types.ARRAY_INT32)
+
+    me.loops.foreach_get("vertex_index", t_pvi)
     t_ls = [None] * len(me.polygons)
     me.polygons.foreach_get("loop_start", t_ls)
-    for ls in t_ls:
-        t_vi[ls - 1] ^= -1
-    elem_data_single_int32_array(geom, b"PolygonVertexIndex", t_vi)
-    del t_vi
-    del t_ls
+    t_ls = set(t_ls)
 
-    # TODO: edges.
+    li_prev = li_start = 0
+    vi_prev = vi_start = t_pvi[0]
+    done_edges = set()
+    for li, vi in enumerate(t_pvi[1:]):
+        end_loop = li in t_ls  # End of a poly's loop.
+        _vi = vi_start if end_loop else vi
+
+        e_key = _vi, vi_prev if _vi < vi_prev else vi_prev, _vi
+        if e_key not in done_edges:
+            t_eli.append(li_prev)
+            done_edges.add(e_key)
+
+        vi_prev = vi
+        li_prev = li
+        if end_loop:
+            vi_start = vi
+            li_start = li
+    # Don't forget last edge!
+    vi = vi_start
+    e_key = _vi, vi_prev if _vi < vi_prev else vi_prev, _vi
+    if e_key not in done_edges:
+        t_eli.append(li_prev)
+        done_edges.add(e_key)
+
+    # We have to ^-1 last index of each loop.
+    for ls in t_ls:
+        t_pvi[ls - 1] ^= -1
+
+    # And finally we can write data!
+    elem_data_single_int32_array(geom, b"PolygonVertexIndex", t_pvi)
+    elem_data_single_int32_array(geom, b"Edges", t_eli)
+    del t_pvi
+    del t_ls
+    del t_eli
 
     # And now, layers!
 
@@ -932,19 +966,19 @@ def fbx_data_mesh_elements(root, me, scene_data):
     elem_data_single_int32(layer, b"Version", FBX_GEOMETRY_LAYER_VERSION)
     lay_nor = elem_empty(layer, b"LayerElement")
     elem_data_single_string(lay_nor, b"Type", b"LayerElementNormal")
-    elem_data_single_int32(lay_nor, b"TypeIndex", 0)
+    elem_data_single_int32(lay_nor, b"TypedIndex", 0)
     if smooth_type in {'FACE', 'EDGE'}:
         lay_smooth = elem_empty(layer, b"LayerElement")
         elem_data_single_string(lay_smooth, b"Type", b"LayerElementSmoothing")
-        elem_data_single_int32(lay_smooth, b"TypeIndex", 0)
+        elem_data_single_int32(lay_smooth, b"TypedIndex", 0)
     if vcolnumber:
         lay_vcol = elem_empty(layer, b"LayerElement")
         elem_data_single_string(lay_vcol, b"Type", b"LayerElementColor")
-        elem_data_single_int32(lay_vcol, b"TypeIndex", 0)
+        elem_data_single_int32(lay_vcol, b"TypedIndex", 0)
     if uvnumber:
         lay_uv = elem_empty(layer, b"LayerElement")
         elem_data_single_string(lay_uv, b"Type", b"LayerElementUV")
-        elem_data_single_int32(lay_uv, b"TypeIndex", 0)
+        elem_data_single_int32(lay_uv, b"TypedIndex", 0)
 
     # Add other uv and/or vcol layers...
     for vcolidx, uvidx in zip_longest(range(1, vcolnumber), range(1, uvnumber), fillvalue=0):
@@ -953,18 +987,20 @@ def fbx_data_mesh_elements(root, me, scene_data):
         if vcolidx:
             lay_vcol = elem_empty(layer, b"LayerElement")
             elem_data_single_string(lay_vcol, b"Type", b"LayerElementColor")
-            elem_data_single_int32(lay_vcol, b"TypeIndex", vcolidx)
+            elem_data_single_int32(lay_vcol, b"TypedIndex", vcolidx)
         if uvidx:
             lay_uv = elem_empty(layer, b"LayerElement")
             elem_data_single_string(lay_uv, b"Type", b"LayerElementUV")
-            elem_data_single_int32(lay_uv, b"TypeIndex", uvidx)
+            elem_data_single_int32(lay_uv, b"TypedIndex", uvidx)
 
 
 def fbx_data_material_elements(root, mat, scene_data):
     """
     Write the Material data block.
     """
-    world = next(iter(scene_data.data_world.keys()))
+    ambient_color = (0.0, 0.0, 0.0)
+    if scene_data.data_world:
+        ambient_color = next(iter(scene_data.data_world.keys())).ambient_color
 
     mat_key, _objs = scene_data.data_materials[mat]
     # Approximation...
@@ -983,7 +1019,7 @@ def fbx_data_material_elements(root, mat, scene_data):
     props = elem_properties(fbx_mat)
     elem_props_template_set(tmpl, props, "p_color_rgb", b"EmissiveColor", mat.diffuse_color)
     elem_props_template_set(tmpl, props, "p_number", b"EmissiveFactor", mat.emit)
-    elem_props_template_set(tmpl, props, "p_color_rgb", b"AmbientColor", world.ambient_color)
+    elem_props_template_set(tmpl, props, "p_color_rgb", b"AmbientColor", ambient_color)
     elem_props_template_set(tmpl, props, "p_number", b"AmbientFactor", mat.ambient)
     elem_props_template_set(tmpl, props, "p_color_rgb", b"DiffuseColor", mat.diffuse_color)
     elem_props_template_set(tmpl, props, "p_number", b"DiffuseFactor", mat.diffuse_intensity)
@@ -1226,7 +1262,10 @@ def fbx_data_from_scene(scene, settings):
     data_meshes = {obj.data: get_blenderID_key(obj.data) for obj in objects if obj.type == 'MESH'}
 
     # Some world settings are embedded in FBX materials...
-    data_world = {scene.world: get_blenderID_key(scene.world)}
+    if scene.world:
+        data_world = {scene.world: get_blenderID_key(scene.world)}
+    else:
+        data_world = {}
 
     data_materials = {}
     for obj in objects:
@@ -1241,7 +1280,7 @@ def fbx_data_from_scene(scene, settings):
                 else:
                     data_materials[mat] = (get_blenderID_key(mat), [obj])
 
-    # Note FBX textures also holds their mapping info.
+    # Note FBX textures also hold their mapping info.
     # TODO: Support layers?
     data_textures = {}
     # FbxVideo also used to store static images...
@@ -1509,6 +1548,7 @@ def fbx_takes_elements(root, scene_data):
     Animations. Have yet to check how this work...
     """
     takes = elem_empty(root, b"Takes")
+    elem_data_single_string(takes, b"Current", b"")
 
 
 ##### "Main" functions. #####
