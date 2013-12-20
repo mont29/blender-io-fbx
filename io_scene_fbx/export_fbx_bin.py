@@ -42,6 +42,7 @@ from . import encode_bin, data_types
 # "Constants"
 FBX_VERSION = 7300
 FBX_HEADER_VERSION = 1003
+FBX_SCENEINFO_VERSION = 100
 FBX_TEMPLATES_VERSION = 100
 
 FBX_MODELS_VERSION = 232
@@ -288,7 +289,9 @@ FBX_PROPERTIES_DEFINITIONS = {
     "p_string": (b"KString", b"", b"", "add_string_unicode"),
     "p_string_url": (b"KString", b"XRefUrl", b"", "add_string_unicode"),
     "p_timestamp": (b"KTime", b"Time", b"", "add_int64"),
+    "p_datetime": (b"DateTime", b"", b"", "add_string_unicode"),
     "p_object": (b"object", b"", b""),  # XXX Check this! No value for this prop???
+    "p_compound": (b"Compound", b"", b""),  # XXX Check this! No value for this prop???
 }
 
 
@@ -307,6 +310,15 @@ def _elem_props_set(elem, ptype, name, value):
 def elem_props_set(elem, ptype, name, value=None):
     ptype = FBX_PROPERTIES_DEFINITIONS[ptype]
     _elem_props_set(elem, ptype, name, value)
+
+
+def elem_props_compound(elem, cmpd_name):
+    def _setter(ptype, name, value):
+        name = cmpd_name + b"|" + name
+        elem_props_set(elem, ptype, name, value)
+
+    elem_props_set(elem, "p_compound", cmpd_name)
+    return _setter
 
 
 def elem_props_template_set(template, elem, ptype_name, name, value):
@@ -1468,7 +1480,36 @@ def fbx_header_elements(root, scene_data, time=None):
 
     elem_data_single_string_unicode(header_ext, b"Creator", "Blender version %s" % bpy.app.version_string)
 
-    # Skip 'SceneInfo' element for now...
+    # 'SceneInfo' seems mandatory to get a valid FBX file...
+    # TODO use real values!
+    # XXX Should we use scene.name.encode() here?
+    scene_info = elem_data_single_string(header_ext, b"SceneInfo", fbx_name_class(b"GlobalInfo", b"SceneInfo"))
+    scene_info.add_string(b"UserData")
+    elem_data_single_string(scene_info, b"Type", b"UserData")
+    elem_data_single_int32(scene_info, b"Version", FBX_SCENEINFO_VERSION)
+    meta_data = elem_empty(scene_info, b"MetaData")
+    elem_data_single_int32(meta_data, b"Version", FBX_SCENEINFO_VERSION)
+    elem_data_single_string(meta_data, b"Title", b"")
+    elem_data_single_string(meta_data, b"Subject", b"")
+    elem_data_single_string(meta_data, b"Author", b"")
+    elem_data_single_string(meta_data, b"Keywords", b"")
+    elem_data_single_string(meta_data, b"Revision", b"")
+    elem_data_single_string(meta_data, b"Comment", b"")
+
+    props = elem_properties(scene_info)
+    elem_props_set(props, "p_string_url", b"DocumentUrl", "/foobar.fbx")
+    elem_props_set(props, "p_string_url", b"SrcDocumentUrl", "/foobar.fbx")
+    original = elem_props_compound(props, b"Original")
+    original("p_string", b"ApplicationVendor", "Blender Foundation")
+    original("p_string", b"ApplicationName", "Blender")
+    original("p_string", b"ApplicationVersion", "2.70")
+    original("p_datetime", b"DateTime_GMT", "01/01/1970 00:00:00.000")
+    original("p_string", b"FileName", "/foobar.fbx")
+    lastsaved = elem_props_compound(props, b"LastSaved")
+    lastsaved("p_string", b"ApplicationVendor", "Blender Foundation")
+    lastsaved("p_string", b"ApplicationName", "Blender")
+    lastsaved("p_string", b"ApplicationVersion", "2.70")
+    lastsaved("p_datetime", b"DateTime_GMT", "01/01/1970 00:00:00.000")
 
     ##### End of FBXHeaderExtension element.
 
