@@ -28,7 +28,7 @@ import os
 import time
 
 import collections
-from collections import namedtuple
+from collections import namedtuple, OrderedDict
 import itertools
 from itertools import zip_longest, chain
 
@@ -331,20 +331,6 @@ def elem_connection(elem, c_type, uid_src, uid_dst, prop_dst=None):
     e.add_int64(uid_dst)
     if prop_dst is not None:
         e.add_string(prop_dst)
-
-
-def elem_connection_oo(elem, uid_src, uid_dst):
-    """
-    Object to Object connection.
-    """
-    elem_connection(elem, b"OO", uid_src, uid_dst)
-
-
-def elem_connection_op(elem, uid_src, uid_dst, prop_dst):
-    """
-    Object to object Property connection.
-    """
-    elem_connection(elem, b"OP", uid_src, uid_dst, prop_dst)
 
 
 ##### Templates #####
@@ -960,7 +946,36 @@ def fbx_data_mesh_elements(root, me, scene_data):
         del t_luv
         del _uvtuples_gen
 
-    # TODO: materials.
+    # Face's materials.
+    me_fbxmats_idx = scene_data.mesh_mat_indices[me]
+    print(me_fbxmats_idx)
+    me_blmats = me.materials
+    if me_fbxmats_idx and me_blmats:
+        lay_mat = elem_data_single_int32(geom, b"LayerElementMaterial", 0)
+        elem_data_single_int32(lay_mat, b"Version", FBX_GEOMETRY_MATERIAL_VERSION)
+        elem_data_single_string(lay_mat, b"Name", b"")
+        nbr_mats = len(me_fbxmats_idx)
+        if nbr_mats > 1:
+            t_pm = array.array(data_types.ARRAY_INT32, [0] * len(me.polygons))
+            me.polygons.foreach_get("material_index", t_pm)
+
+            # We have to validate mat indices, and map them to FBX indices.
+            blmats_to_fbxmats_idxs = [me_fbxmats_idx[m] for m in me_blmats]
+            mat_idx_limit = len(blmats_to_fbxmats_idxs)
+            def_mat = blmats_to_fbxmats_idxs[0]
+            _gen = (blmats_to_fbxmats_idxs[m] if m < mat_idx_limit else def_mat for m in range(len(me_blmats)))
+            t_pm = array.array(data_types.ARRAY_INT32, _gen)
+
+            elem_data_single_string(lay_mat, b"MappingInformationType", b"ByPolygon")
+            elem_data_single_string(lay_mat, b"ReferenceInformationType", b"Direct")
+            elem_data_single_int32_array(lay_mat, b"Materials", t_pm)
+            del t_pm
+        else:
+            elem_data_single_string(lay_mat, b"MappingInformationType", b"AllSame")
+            elem_data_single_string(lay_mat, b"ReferenceInformationType", b"IndexToDirect")
+            elem_data_single_int32_array(lay_mat, b"Materials", [0])
+
+    # And the "layer TOC"...
 
     layer = elem_data_single_int32(geom, b"Layer", 0)
     elem_data_single_int32(layer, b"Version", FBX_GEOMETRY_LAYER_VERSION)
@@ -979,6 +994,10 @@ def fbx_data_mesh_elements(root, me, scene_data):
         lay_uv = elem_empty(layer, b"LayerElement")
         elem_data_single_string(lay_uv, b"Type", b"LayerElementUV")
         elem_data_single_int32(lay_uv, b"TypedIndex", 0)
+    if me_fbxmats_idx:
+        lay_mat = elem_empty(layer, b"LayerElement")
+        elem_data_single_string(lay_mat, b"Type", b"LayerElementMaterial")
+        elem_data_single_int32(lay_mat, b"TypedIndex", 0)
 
     # Add other uv and/or vcol layers...
     for vcolidx, uvidx in zip_longest(range(1, vcolnumber), range(1, uvnumber), fillvalue=0):
@@ -1214,9 +1233,9 @@ def fbx_data_object_elements(root, obj, scene_data):
 #     * connections.
 #     * takes.
 FBXData = namedtuple("FBXData", (
-    "templates", "templates_users",
+    "templates", "templates_users", "connections",
     "settings", "scene", "objects",
-    "data_lamps", "data_cameras", "data_meshes",
+    "data_lamps", "data_cameras", "data_meshes", "mesh_mat_indices",
     "data_world", "data_materials", "data_textures", "data_videos",
 ))
 
@@ -1253,6 +1272,8 @@ def fbx_data_from_scene(scene, settings):
         b"GlobalSettings": fbx_template_def_globalsettings(scene, settings, nbr_users=1),
     }
 
+    ##### Gathering data...
+
     # This is rather simple for now, maybe we could end generating templates with most-used values
     # instead of default ones?
     objects = {obj: get_blenderID_key(obj) for obj in scene.objects if obj.type in objtypes}
@@ -1267,8 +1288,14 @@ def fbx_data_from_scene(scene, settings):
     else:
         data_world = {}
 
+    # TODO: Check all the mat stuff works even when mats are linked to Objects
+    #       (we can then have the same mesh used with different materials...).
+    #       *Should* work, as FBX always links its materials to Models (i.e. objects).
     data_materials = {}
     for obj in objects:
+        # Only meshes for now!
+        if obj.type not in {'MESH'}:
+            continue
         for mat_s in obj.material_slots:
             mat = mat_s.material
             # Note theoretically, FBX supports any kind of materials, even GLSL shaders etc.
@@ -1313,6 +1340,8 @@ def fbx_data_from_scene(scene, settings):
             else:
                 data_videos[img] = (get_blenderID_key(img), [tex])
 
+    ##### Creation of templates...
+
     if objects:
         # We use len(object) + len(data_cameras) because of the CameraSwitcher objects...
         templates[b"Model"] = fbx_template_def_model(scene, settings, nbr_users=len(objects) + len(data_cameras))
@@ -1344,10 +1373,66 @@ def fbx_data_from_scene(scene, settings):
         templates[b"Video"] = fbx_template_def_video(scene, settings, nbr_users=len(data_videos))
 
     templates_users = sum(tmpl.nbr_users for tmpl in templates.values())
+
+    ##### Creation of connections...
+
+    connections = []
+
+    for obj, obj_key in objects.items():
+        par = obj.parent
+        par_key = 0
+        if par and par in objects:
+            # TODO: Check this is the correct way to have object parenting!
+            par_key = objects[par]
+        connections.append((b"OO", get_fbxuid_from_key(obj_key), get_fbxuid_from_key(par_key), None))
+
+    for obj_cam, (cam_key, cam_switcher_key, cam_obj_switcher_key) in data_cameras.items():
+        # Looks like the 'object' ('Model' in FBX) for the camera switcher is not linked to anything in FBX...
+        connections.append((b"OO", get_fbxuid_from_key(cam_switcher_key), get_fbxuid_from_key(cam_obj_switcher_key),
+                            None))
+        cam_obj_key = objects[obj_cam]
+        connections.append((b"OO", get_fbxuid_from_key(cam_key), get_fbxuid_from_key(cam_obj_key), None))
+
+    for obj, obj_key in objects.items():
+        if obj.type == 'LAMP':
+            lamp_key = data_lamps[obj.data]
+            connections.append((b"OO", get_fbxuid_from_key(lamp_key), get_fbxuid_from_key(obj_key), None))
+        elif obj.type == 'MESH':
+            mesh_key = data_meshes[obj.data]
+            connections.append((b"OO", get_fbxuid_from_key(mesh_key), get_fbxuid_from_key(obj_key), None))
+
+    mesh_mat_indices = {}
+    _objs_indices = {}
+    for mat, (mat_key, objs) in data_materials.items():
+        for obj in objs:
+            obj_key = objects[obj]
+            connections.append((b"OO", get_fbxuid_from_key(mat_key), get_fbxuid_from_key(obj_key), None))
+            # Get index of this mat for this object.
+            # XXX For now, assuming mat indices for mesh faces are determined by their order in 'mat to ob' connections.
+            #     This is only a wild guess, will have to check this!!!
+            # Only mats for meshes currently...
+            me = obj.data
+            idx = _objs_indices[obj] = _objs_indices.get(obj, -1) + 1
+            mesh_mat_indices.setdefault(me, {})[mat] = idx
+    del _objs_indices
+
+    for tex, (tex_key, mats) in data_textures.items():
+        for mat, fbx_mat_props in mats.items():
+            mat_key, _objs = data_materials[mat]
+            for fbx_prop in fbx_mat_props:
+                connections.append((b"OP", get_fbxuid_from_key(tex_key), get_fbxuid_from_key(mat_key), fbx_prop))
+
+    for vid, (vid_key, texs) in data_videos.items():
+        for tex in texs:
+            tex_key, _texs = data_textures[tex]
+            connections.append((b"OO", get_fbxuid_from_key(vid_key), get_fbxuid_from_key(tex_key), None))
+
+    ##### And pack all this!
+
     return FBXData(
-        templates, templates_users,
+        templates, templates_users, connections,
         settings, scene, objects,
-        data_lamps, data_cameras, data_meshes,
+        data_lamps, data_cameras, data_meshes, mesh_mat_indices,
         data_world, data_materials, data_textures, data_videos,
     )
 
@@ -1502,45 +1587,8 @@ def fbx_connections_elements(root, scene_data):
     """
     connections = elem_empty(root, b"Connections")
 
-    for obj, obj_key in scene_data.objects.items():
-        par = obj.parent
-        par_key = 0
-        if par and par in scene_data.objects:
-            # TODO: Check this is the correct way to have object parenting!
-            par_key = scene_data.objects[par]
-        elem_connection_oo(connections, get_fbxuid_from_key(obj_key), get_fbxuid_from_key(par_key))
-
-    # And now, object data.
-    for obj_cam, (cam_key, cam_switcher_key, cam_obj_switcher_key) in scene_data.data_cameras.items():
-        # Looks like the 'object' ('Model' in FBX) for the camera switcher is not linked to anything in FBX...
-        elem_connection_oo(connections, get_fbxuid_from_key(cam_switcher_key),
-                        get_fbxuid_from_key(cam_obj_switcher_key))
-        cam_obj_key = scene_data.objects[obj_cam]
-        elem_connection_oo(connections, get_fbxuid_from_key(cam_key), get_fbxuid_from_key(cam_obj_key))
-
-    for obj, obj_key in scene_data.objects.items():
-        if obj.type == 'LAMP':
-            lamp_key = scene_data.data_lamps[obj.data]
-            elem_connection_oo(connections, get_fbxuid_from_key(lamp_key), get_fbxuid_from_key(obj_key))
-        elif obj.type == 'MESH':
-            mesh_key = scene_data.data_meshes[obj.data]
-            elem_connection_oo(connections, get_fbxuid_from_key(mesh_key), get_fbxuid_from_key(obj_key))
-
-    for mat, (mat_key, objs) in scene_data.data_materials.items():
-        for obj in objs:
-            obj_key = scene_data.objects[obj]
-            elem_connection_oo(connections, get_fbxuid_from_key(mat_key), get_fbxuid_from_key(obj_key))
-
-    for tex, (tex_key, mats) in scene_data.data_textures.items():
-        for mat, fbx_mat_props in mats.items():
-            mat_key, _objs = scene_data.data_materials[mat]
-            for fbx_prop in fbx_mat_props:
-                elem_connection_op(connections, get_fbxuid_from_key(tex_key), get_fbxuid_from_key(mat_key), fbx_prop)
-
-    for vid, (vid_key, texs) in scene_data.data_videos.items():
-        for tex in texs:
-            tex_key, _texs = scene_data.data_textures[tex]
-            elem_connection_oo(connections, get_fbxuid_from_key(vid_key), get_fbxuid_from_key(tex_key))
+    for c in scene_data.connections:
+        elem_connection(connections, *c)
 
 
 def fbx_takes_elements(root, scene_data):
