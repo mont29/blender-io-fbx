@@ -287,7 +287,7 @@ FBX_PROPERTIES_DEFINITIONS = {
     "p_lcl_scaling": (b"Lcl Scaling", b"", b"A+", "add_float64", "add_float64", "add_float64"),
     "p_color_rgb": (b"ColorRGB", b"Color", b"", "add_float64", "add_float64", "add_float64"),
     "p_string": (b"KString", b"", b"", "add_string_unicode"),
-    "p_string_url": (b"KString", b"XRefUrl", b"", "add_string_unicode"),
+    "p_string_url": (b"KString", b"Url", b"", "add_string_unicode"),
     "p_timestamp": (b"KTime", b"Time", b"", "add_int64"),
     "p_datetime": (b"DateTime", b"", b"", "add_string_unicode"),
     "p_object": (b"object", b"", b""),  # XXX Check this! No value for this prop???
@@ -1280,10 +1280,6 @@ def fbx_data_from_scene(scene, settings):
     """
     objtypes = settings.object_types
 
-    templates = {
-        b"GlobalSettings": fbx_template_def_globalsettings(scene, settings, nbr_users=1),
-    }
-
     ##### Gathering data...
 
     # This is rather simple for now, maybe we could end generating templates with most-used values
@@ -1354,9 +1350,8 @@ def fbx_data_from_scene(scene, settings):
 
     ##### Creation of templates...
 
-    if objects:
-        # We use len(object) + len(data_cameras) because of the CameraSwitcher objects...
-        templates[b"Model"] = fbx_template_def_model(scene, settings, nbr_users=len(objects) + len(data_cameras))
+    templates = OrderedDict()
+    templates[b"GlobalSettings"] = fbx_template_def_globalsettings(scene, settings, nbr_users=1)
 
     if data_lamps:
         templates[b"Light"] = fbx_template_def_light(scene, settings, nbr_users=len(data_lamps))
@@ -1368,6 +1363,10 @@ def fbx_data_from_scene(scene, settings):
 
     if data_meshes:
         templates[b"Geometry"] = fbx_template_def_geometry(scene, settings, nbr_users=len(data_meshes))
+
+    if objects:
+        # We use len(object) + len(data_cameras) because of the CameraSwitcher objects...
+        templates[b"Model"] = fbx_template_def_model(scene, settings, nbr_users=len(objects) + len(data_cameras))
 
     # No world support in FBX...
     """
@@ -1476,7 +1475,7 @@ def fbx_header_elements(root, scene_data, time=None):
     elem_data_single_int32(elem, b"Hour", time.hour)
     elem_data_single_int32(elem, b"Minute", time.minute)
     elem_data_single_int32(elem, b"Second", time.second)
-    elem_data_single_int32(elem, b"Millisecond", time.microsecond * 1000)
+    elem_data_single_int32(elem, b"Millisecond", time.microsecond // 1000)
 
     elem_data_single_string_unicode(header_ext, b"Creator", "Blender version %s" % bpy.app.version_string)
 
@@ -1538,7 +1537,7 @@ def fbx_header_elements(root, scene_data, time=None):
     elem_props_set(props, "p_integer", b"CoordAxisSign", 1)
     elem_props_set(props, "p_number", b"UnitScaleFactor", 1.0)
     elem_props_set(props, "p_color_rgb", b"AmbientColor", (0.0, 0.0, 0.0))
-    elem_props_set(props, "p_string", b"DefaultCamera", "")
+    elem_props_set(props, "p_string", b"DefaultCamera", "Producer Front")
     # XXX Those time stuff is taken from a file, have no (complete) idea what it means!
     elem_props_set(props, "p_enum", b"TimeMode", 11)
     elem_props_set(props, "p_timestamp", b"TimeSpanStart", 0)
