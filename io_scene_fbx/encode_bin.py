@@ -20,7 +20,11 @@
 
 # Script copyright (C) 2013 Campbell Barton
 
-from . import data_types
+try:
+    from . import data_types
+except:
+    import data_types
+
 from struct import pack
 import array
 import zlib
