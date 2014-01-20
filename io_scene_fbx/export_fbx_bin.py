@@ -40,7 +40,7 @@ from . import encode_bin, data_types
 
 
 # "Constants"
-FBX_VERSION = 7300
+FBX_VERSION = 7400
 FBX_HEADER_VERSION = 1003
 FBX_SCENEINFO_VERSION = 100
 FBX_TEMPLATES_VERSION = 100
@@ -435,7 +435,7 @@ def fbx_template_def_model(scene, settings, override_defaults=None, nbr_users=0)
         b"UpVectorProperty": (None, "p_object"),
         b"Show": (True, "p_bool"),
         b"NegativePercentShapeSupport": (True, "p_bool"),
-        b"DefaultAttributeIndex": (-1, "p_integer"),
+        b"DefaultAttributeIndex": (0, "p_integer"),
         b"Freeze": (False, "p_bool"),
         b"LODBox": (False, "p_bool"),
         b"Lcl Translation": ((0.0, 0.0, 0.0), "p_lcl_translation"),
@@ -445,7 +445,7 @@ def fbx_template_def_model(scene, settings, override_defaults=None, nbr_users=0)
     }
     if override_defaults is not None:
         props.update(override_defaults)
-    return FBXTemplate(b"Model", b"KFbxNode", props, nbr_users)
+    return FBXTemplate(b"Model", b"FbxNode", props, nbr_users)
 
 
 def fbx_template_def_light(scene, settings, override_defaults=None, nbr_users=0):
@@ -463,14 +463,14 @@ def fbx_template_def_light(scene, settings, override_defaults=None, nbr_users=0)
     }
     if override_defaults is not None:
         props.update(override_defaults)
-    return FBXTemplate(b"NodeAttribute", b"KFbxLight", props, nbr_users)
+    return FBXTemplate(b"NodeAttribute", b"FbxLight", props, nbr_users)
 
 
 def fbx_template_def_camera(scene, settings, override_defaults=None, nbr_users=0):
     props = {}
     if override_defaults is not None:
         props.update(override_defaults)
-    return FBXTemplate(b"NodeAttribute", b"KFbxCamera", props, nbr_users)
+    return FBXTemplate(b"NodeAttribute", b"FbxCamera", props, nbr_users)
 
 
 def fbx_template_def_cameraswitcher(scene, settings, override_defaults=None, nbr_users=0):
@@ -480,7 +480,7 @@ def fbx_template_def_cameraswitcher(scene, settings, override_defaults=None, nbr
     }
     if override_defaults is not None:
         props.update(override_defaults)
-    return FBXTemplate(b"NodeAttribute", b"KFbxCameraSwitcher", props, nbr_users)
+    return FBXTemplate(b"NodeAttribute", b"FbxCameraSwitcher", props, nbr_users)
 
 
 def fbx_template_def_geometry(scene, settings, override_defaults=None, nbr_users=0):
@@ -491,7 +491,7 @@ def fbx_template_def_geometry(scene, settings, override_defaults=None, nbr_users
     }
     if override_defaults is not None:
         props.update(override_defaults)
-    return FBXTemplate(b"Geometry", b"KFbxMesh", props, nbr_users)
+    return FBXTemplate(b"Geometry", b"FbxMesh", props, nbr_users)
 
 
 def fbx_template_def_material(scene, settings, override_defaults=None, nbr_users=0):
@@ -516,14 +516,17 @@ def fbx_template_def_material(scene, settings, override_defaults=None, nbr_users
         # Phong-specific.
         b"SpecularColor": ((1.0, 1.0, 1.0), "p_color_rgb"),
         b"SpecularFactor": (0.5 / 2.0, "p_number"),
-        # Not sure about that name,importer use this (but ShininessExponent for tex prop name!) :/
+        # Not sure about the name, importer use this (but ShininessExponent for tex prop name!)
+        # And in fbx exported by sdk, you have one in template, the other in actual material!!! :/
+        # For now, using both.
         b"Shininess": ((50.0 - 1.0) / 5.10, "p_number"),
+        b"ShininessExponent": ((50.0 - 1.0) / 5.10, "p_number"),
         b"ReflectionColor": ((1.0, 1.0, 1.0), "p_color_rgb"),
         b"RefectionFactor": (0.0, "p_number"),
     }
     if override_defaults is not None:
         props.update(override_defaults)
-    return FBXTemplate(b"Material", b"KFbxSurfacePhong", props, nbr_users)
+    return FBXTemplate(b"Material", b"FbxSurfacePhong", props, nbr_users)
 
 
 def fbx_template_def_texture_file(scene, settings, override_defaults=None, nbr_users=0):
@@ -550,7 +553,7 @@ def fbx_template_def_texture_file(scene, settings, override_defaults=None, nbr_u
     }
     if override_defaults is not None:
         props.update(override_defaults)
-    return FBXTemplate(b"Texture", b"KFbxFileTexture", props, nbr_users)
+    return FBXTemplate(b"Texture", b"FbxFileTexture", props, nbr_users)
 
 
 def fbx_template_def_video(scene, settings, override_defaults=None, nbr_users=0):
@@ -577,7 +580,7 @@ def fbx_template_def_video(scene, settings, override_defaults=None, nbr_users=0)
     }
     if override_defaults is not None:
         props.update(override_defaults)
-    return FBXTemplate(b"Video", b"KFbxVideo", props, nbr_users)
+    return FBXTemplate(b"Video", b"FbxVideo", props, nbr_users)
 
  
 def fbx_template_def_pose(gmat, gscale, override_defaults=None, nbr_users=0):
@@ -959,33 +962,35 @@ def fbx_data_mesh_elements(root, me, scene_data):
         del _uvtuples_gen
 
     # Face's materials.
-    me_fbxmats_idx = scene_data.mesh_mat_indices[me]
-    print(me_fbxmats_idx)
-    me_blmats = me.materials
-    if me_fbxmats_idx and me_blmats:
-        lay_mat = elem_data_single_int32(geom, b"LayerElementMaterial", 0)
-        elem_data_single_int32(lay_mat, b"Version", FBX_GEOMETRY_MATERIAL_VERSION)
-        elem_data_single_string(lay_mat, b"Name", b"")
-        nbr_mats = len(me_fbxmats_idx)
-        if nbr_mats > 1:
-            t_pm = array.array(data_types.ARRAY_INT32, [0] * len(me.polygons))
-            me.polygons.foreach_get("material_index", t_pm)
+    me_fbxmats_idx = None
+    if me in scene_data.mesh_mat_indices:
+        me_fbxmats_idx = scene_data.mesh_mat_indices[me]
+        print(me_fbxmats_idx)
+        me_blmats = me.materials
+        if me_fbxmats_idx and me_blmats:
+            lay_mat = elem_data_single_int32(geom, b"LayerElementMaterial", 0)
+            elem_data_single_int32(lay_mat, b"Version", FBX_GEOMETRY_MATERIAL_VERSION)
+            elem_data_single_string(lay_mat, b"Name", b"")
+            nbr_mats = len(me_fbxmats_idx)
+            if nbr_mats > 1:
+                t_pm = array.array(data_types.ARRAY_INT32, [0] * len(me.polygons))
+                me.polygons.foreach_get("material_index", t_pm)
 
-            # We have to validate mat indices, and map them to FBX indices.
-            blmats_to_fbxmats_idxs = [me_fbxmats_idx[m] for m in me_blmats]
-            mat_idx_limit = len(blmats_to_fbxmats_idxs)
-            def_mat = blmats_to_fbxmats_idxs[0]
-            _gen = (blmats_to_fbxmats_idxs[m] if m < mat_idx_limit else def_mat for m in range(len(me_blmats)))
-            t_pm = array.array(data_types.ARRAY_INT32, _gen)
+                # We have to validate mat indices, and map them to FBX indices.
+                blmats_to_fbxmats_idxs = [me_fbxmats_idx[m] for m in me_blmats]
+                mat_idx_limit = len(blmats_to_fbxmats_idxs)
+                def_mat = blmats_to_fbxmats_idxs[0]
+                _gen = (blmats_to_fbxmats_idxs[m] if m < mat_idx_limit else def_mat for m in range(len(me_blmats)))
+                t_pm = array.array(data_types.ARRAY_INT32, _gen)
 
-            elem_data_single_string(lay_mat, b"MappingInformationType", b"ByPolygon")
-            elem_data_single_string(lay_mat, b"ReferenceInformationType", b"Direct")
-            elem_data_single_int32_array(lay_mat, b"Materials", t_pm)
-            del t_pm
-        else:
-            elem_data_single_string(lay_mat, b"MappingInformationType", b"AllSame")
-            elem_data_single_string(lay_mat, b"ReferenceInformationType", b"IndexToDirect")
-            elem_data_single_int32_array(lay_mat, b"Materials", [0])
+                elem_data_single_string(lay_mat, b"MappingInformationType", b"ByPolygon")
+                elem_data_single_string(lay_mat, b"ReferenceInformationType", b"Direct")
+                elem_data_single_int32_array(lay_mat, b"Materials", t_pm)
+                del t_pm
+            else:
+                elem_data_single_string(lay_mat, b"MappingInformationType", b"AllSame")
+                elem_data_single_string(lay_mat, b"ReferenceInformationType", b"IndexToDirect")
+                elem_data_single_int32_array(lay_mat, b"Materials", [0])
 
     # And the "layer TOC"...
 
@@ -1067,7 +1072,9 @@ def fbx_data_material_elements(root, mat, scene_data):
     if mat_type == b"phong":
         elem_props_template_set(tmpl, props, "p_color_rgb", b"SpecularColor", mat.specular_color)
         elem_props_template_set(tmpl, props, "p_number", b"SpecularFactor", mat.specular_intensity / 2.0)
+        # See Material template about those two!
         elem_props_template_set(tmpl, props, "p_number", b"Shininess", (mat.specular_hardness - 1.0) / 5.10)
+        elem_props_template_set(tmpl, props, "p_number", b"ShininessExponent", (mat.specular_hardness - 1.0) / 5.10)
         elem_props_template_set(tmpl, props, "p_color_rgb", b"ReflectionColor", mat.mirror_color)
         elem_props_template_set(tmpl, props, "p_number", b"RefectionFactor",
                                 mat.raytrace_mirror.reflect_factor if mat.raytrace_mirror.use else 0.0)
@@ -1537,7 +1544,7 @@ def fbx_header_elements(root, scene_data, time=None):
     elem_props_set(props, "p_integer", b"CoordAxisSign", 1)
     elem_props_set(props, "p_number", b"UnitScaleFactor", 1.0)
     elem_props_set(props, "p_color_rgb", b"AmbientColor", (0.0, 0.0, 0.0))
-    elem_props_set(props, "p_string", b"DefaultCamera", "Producer Front")
+    elem_props_set(props, "p_string", b"DefaultCamera", "Producer Perspective")
     # XXX Those time stuff is taken from a file, have no (complete) idea what it means!
     elem_props_set(props, "p_enum", b"TimeMode", 11)
     elem_props_set(props, "p_timestamp", b"TimeSpanStart", 0)
