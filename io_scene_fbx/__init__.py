@@ -16,12 +16,12 @@
 #
 # ##### END GPL LICENSE BLOCK #####
 
-# <pep8-80 compliant>
+# <pep8 compliant>
 
 bl_info = {
     "name": "Autodesk FBX format",
     "author": "Campbell Barton, Bastien Montagne",
-    "blender": (2, 69, 4),
+    "blender": (2, 70, 0),
     "location": "File > Import-Export",
     "description": "Export FBX meshes, UV's, vertex colors, materials, "
                    "textures, cameras, lamps and actions",
@@ -221,7 +221,13 @@ class ExportFBX(bpy.types.Operator, ExportHelper):
             )
 
     use_mesh_edges = BoolProperty(
-            name="Include Edges",
+            name="Include Loose Edges",
+            default=False,
+            )
+    use_tspace = BoolProperty(
+            name="Include Tangent Space",
+            description=("Add binormal and tangent vectors, together with normal they form the tangent space "
+                         "(will only work correctly with tris/quads only meshes!)"),
             default=False,
             )
     use_armature_deform_only = BoolProperty(

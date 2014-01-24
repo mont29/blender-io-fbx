@@ -48,7 +48,9 @@ FBX_TEMPLATES_VERSION = 100
 FBX_MODELS_VERSION = 232
 
 FBX_GEOMETRY_VERSION = 124
-FBX_GEOMETRY_NORMAL_VERSION = 101
+FBX_GEOMETRY_NORMAL_VERSION = 102
+FBX_GEOMETRY_BINORMAL_VERSION = 102
+FBX_GEOMETRY_TANGENT_VERSION = 102
 FBX_GEOMETRY_SMOOTHING_VERSION = 102
 FBX_GEOMETRY_VCOLOR_VERSION = 101
 FBX_GEOMETRY_UV_VERSION = 101
@@ -792,40 +794,59 @@ def fbx_data_mesh_elements(root, me, scene_data):
 
     # Polygon indices.
     #
-    # Note: we have to do edges indices in the same time, as they actually refer to vertices indices from polygons,
-    # why make it simple when you can do it the hard way?
-    # TODO: Lose edges? For now, ignore them.
-    t_pvi = array.array(data_types.ARRAY_INT32, [0] * len(me.loops))
-    t_eli = array.array(data_types.ARRAY_INT32)
+    # We do loose edges as two-vertices faces, if enabled...
+    #
+    # Note we have to process Edges in the same time, as they are based on poly's loops... 
+    loop_nbr = len(me.loops)
+    t_pvi = array.array(data_types.ARRAY_INT32, (0,) * loop_nbr)
+    t_ls = [None] * len(me.polygons)
 
     me.loops.foreach_get("vertex_index", t_pvi)
-    t_ls = [None] * len(me.polygons)
     me.polygons.foreach_get("loop_start", t_ls)
-    t_ls = set(t_ls)
 
-    li_prev = li_start = 0
-    vi_prev = vi_start = t_pvi[0]
-    done_edges = set()
-    for li, vi in enumerate(t_pvi[1:]):
-        end_loop = li in t_ls  # End of a poly's loop.
-        _vi = vi_start if end_loop else vi
+    # Add "fake" faces for loose edges.
+    if scene_data.settings.use_mesh_edges:
+        t_le = tuple(e.vertices for e in me.edges if e.is_loose)
+        t_pvi.extend(chain(*t_le))
+        t_ls.extend(range(loop_nbr, loop_nbr + len(t_le), 2))
+        del t_le
 
-        e_key = _vi, vi_prev if _vi < vi_prev else vi_prev, _vi
-        if e_key not in done_edges:
-            t_eli.append(li_prev)
-            done_edges.add(e_key)
+    # Edges...
+    # Note: Edges are represented as a loop here: each edge uses a single index, which refers to the polygon array.
+    #       The edge is made by the vertex indexed py this polygon's point and the next one on the same polygon.
+    #       Advantage: Only one index per edge.
+    #       Drawback: Only polygon's edges can be represented (that's why we have to add fake two-verts polygons
+    #                 for loose edges).
+    #       We also have to store a mapping from real edges to their indices in this array, for edge-mapped data
+    #       (like e.g. crease).
+    t_eli = array.array(data_types.ARRAY_INT32)
+    edges_map = {}
+    edges_nbr = 0
+    if t_ls and t_pvi:
+        t_ls = set(t_ls)
+        todo_edges = [None] * len(me.edges) * 2
+        me.edges.foreach_get("vertices", todo_edges)
+        todo_edges = set((v1, v2) if v1 < v2 else (v2, v1) for v1, v2 in zip(*(iter(todo_edges),) * 2))
 
-        vi_prev = vi
-        li_prev = li
-        if end_loop:
-            vi_start = vi
-            li_start = li
-    # Don't forget last edge!
-    vi = vi_start
-    e_key = _vi, vi_prev if _vi < vi_prev else vi_prev, _vi
-    if e_key not in done_edges:
-        t_eli.append(li_prev)
-        done_edges.add(e_key)
+        li = 0
+        vi = vi_start = t_pvi[0]
+        for li_next, vi_next in enumerate(t_pvi[1:] + t_pvi[:1], start=1):
+            if li_next in t_ls:  # End of a poly's loop.
+                vi2 = vi_start
+                vi_start = vi_next
+            else:
+                vi2 = vi_next
+
+            e_key = (vi, vi2) if vi < vi2 else (vi2, vi)
+            if e_key in todo_edges:
+                t_eli.append(li)
+                todo_edges.remove(e_key)
+                edges_map[e_key] = edges_nbr
+                edges_nbr += 1
+
+            vi = vi_next
+            li = li_next
+    # End of edges!
 
     # We have to ^-1 last index of each loop.
     for ls in t_ls:
@@ -840,15 +861,44 @@ def fbx_data_mesh_elements(root, me, scene_data):
 
     # And now, layers!
 
+    # Smoothing.
+    if smooth_type in {'FACE', 'EDGE'}:
+        t_ps = None
+        _map = b""
+        if smooth_type == 'FACE':
+            t_ps = array.array(data_types.ARRAY_INT32, [0] * len(me.polygons))
+            me.polygons.foreach_get("use_smooth", t_ps)
+            _map = b"ByPolygon"
+        else:  # EDGE
+            # Write Edge Smoothing.
+            t_ps = array.array(data_types.ARRAY_INT32, (0,) * edges_nbr)
+            for e in me.edges:
+                if e.key not in edges_map:
+                    continue  # Only loose edges, in theory!
+                t_ps[edges_map[e.key]] = not e.use_edge_sharp
+            _map = b"ByEdge"
+        lay_smooth = elem_data_single_int32(geom, b"LayerElementSmoothing", 0)
+        elem_data_single_int32(lay_smooth, b"Version", FBX_GEOMETRY_SMOOTHING_VERSION)
+        elem_data_single_string(lay_smooth, b"Name", b"")
+        elem_data_single_string(lay_smooth, b"MappingInformationType", _map)
+        elem_data_single_string(lay_smooth, b"ReferenceInformationType", b"Direct")
+        elem_data_single_int32_array(lay_smooth, b"Smoothing", t_ps);  # Sight, int32 for bool...
+        del t_ps
+
+    # TODO: Edge crease (LayerElementCrease).
+
+    # And we are done with edges!
+    del edges_map
+
     # Loop normals.
     # NOTE: this is not supported by importer currently.
     # XXX Official docs says normals should use IndexToDirect,
     #     but this does not seem well supported by apps currently...
+    me.calc_normals_split()
     if 0:
         def _nortuples_gen(raw_nors):
             return zip(*(iter(raw_nors),) * 3)
 
-        me.calc_normals_split()
         t_ln = array.array(data_types.ARRAY_FLOAT64, [0.0] * len(me.loops) * 3)
         me.loops.foreach_get("normal", t_ln)
         lay_nor = elem_data_single_int32(geom, b"LayerElementNormal", 0)
@@ -859,6 +909,8 @@ def fbx_data_mesh_elements(root, me, scene_data):
 
         ln2idx = tuple(set(_nortuples_gen(t_ln)))
         elem_data_single_float64_array(lay_nor, b"Normals", chain(*ln2idx))
+        # Normal weights, no idea what it is.
+        elem_data_single_float64_array(lay_nor, b"NormalsW", (0.0,) * len(ln2idx))
 
         ln2idx = {nor: idx for idx, nor in enumerate(ln2idx)}
         elem_data_single_int32_array(lay_nor, b"NormalIndex", (ln2idx[n] for n in _nortuples_gen(t_ln)))
@@ -866,9 +918,7 @@ def fbx_data_mesh_elements(root, me, scene_data):
         del ln2idx
         del t_ln
         del _nortuples_gen
-        me.free_normals_split()
     else:
-        me.calc_normals_split()
         t_ln = array.array(data_types.ARRAY_FLOAT64, [0.0] * len(me.loops) * 3)
         me.loops.foreach_get("normal", t_ln)
         lay_nor = elem_data_single_int32(geom, b"LayerElementNormal", 0)
@@ -877,36 +927,47 @@ def fbx_data_mesh_elements(root, me, scene_data):
         elem_data_single_string(lay_nor, b"MappingInformationType", b"ByPolygonVertex")
         elem_data_single_string(lay_nor, b"ReferenceInformationType", b"Direct")
         elem_data_single_float64_array(lay_nor, b"Normals", t_ln)
+        # Normal weights, no idea what it is.
+        elem_data_single_float64_array(lay_nor, b"NormalsW", (0.0,) * len(t_ln))
         del t_ln
-        me.free_normals_split()
 
-    # TODO: binormal and tangent, to get a complete tspace export.
+    # tspace
+    tspacenumber = 0
+    if scene_data.settings.use_tspace:
+        tspacenumber = len(me.uv_layers)
+        if tspacenumber:
+            t_ln = array.array(data_types.ARRAY_FLOAT64, (0.0,) * len(me.loops) * 3)
+            for idx, uvlayer in enumerate(me.uv_layers):
+                name = uvlayer.name
+                me.calc_tangents(name)
+                # Loop bitangents (aka binormals).
+                # NOTE: this is not supported by importer currently.
+                me.loops.foreach_get("bitangent", t_ln)
+                lay_nor = elem_data_single_int32(geom, b"LayerElementBinormal", idx)
+                elem_data_single_int32(lay_nor, b"Version", FBX_GEOMETRY_BINORMAL_VERSION)
+                elem_data_single_string_unicode(lay_nor, b"Name", name)
+                elem_data_single_string(lay_nor, b"MappingInformationType", b"ByPolygonVertex")
+                elem_data_single_string(lay_nor, b"ReferenceInformationType", b"Direct")
+                elem_data_single_float64_array(lay_nor, b"Binormals", t_ln)
+                # Binormal weights, no idea what it is.
+                elem_data_single_float64_array(lay_nor, b"BinormalsW", (0.0,) * len(t_ln))
 
-    # Smoothing.
-    if smooth_type in {'FACE', 'EDGE'}:
-        t_ps = None
-        _map = b""
-        if smooth_type == 'FACE':
-            t_ps = array.array(data_types.ARRAY_INT32, [0] * len(me.polygons))
-            me.polygons.foreach_get("use_smooth", t_ps)
-            _map = b"ByPolygon"
-        else:  # EDGE
-            # Write Edge Smoothing
-            # XXX Shouldn't this be also dependent on use_mesh_edges?
-            t_ps = array.array(data_types.ARRAY_BOOL, [False] * len(me.edges))
-            me.edges.foreach_get("use_edge_sharp", t_ps)
-            t_ps = array.array(data_types.ARRAY_INT32, (not e for e in t_ps))
-            _map = b"ByEdge"
-        lay_smooth = elem_data_single_int32(geom, b"LayerElementSmoothing", 0)
-        elem_data_single_int32(lay_smooth, b"Version", FBX_GEOMETRY_SMOOTHING_VERSION)
-        elem_data_single_string(lay_smooth, b"Name", b"")
-        elem_data_single_string(lay_smooth, b"MappingInformationType", _map)
-        elem_data_single_string(lay_smooth, b"ReferenceInformationType", b"Direct")
-        elem_data_single_int32_array(lay_smooth, b"Smoothing", t_ps);  # Sight, int32 for bool...
-        del t_ps
-        del _map
+                # Loop tangents.
+                # NOTE: this is not supported by importer currently.
+                me.loops.foreach_get("tangent", t_ln)
+                lay_nor = elem_data_single_int32(geom, b"LayerElementTangent", idx)
+                elem_data_single_int32(lay_nor, b"Version", FBX_GEOMETRY_TANGENT_VERSION)
+                elem_data_single_string_unicode(lay_nor, b"Name", name)
+                elem_data_single_string(lay_nor, b"MappingInformationType", b"ByPolygonVertex")
+                elem_data_single_string(lay_nor, b"ReferenceInformationType", b"Direct")
+                elem_data_single_float64_array(lay_nor, b"Tangents", t_ln)
+                # Tangent weights, no idea what it is.
+                elem_data_single_float64_array(lay_nor, b"TangentsW", (0.0,) * len(t_ln))
 
-    # TODO: Edge crease (LayerElementCrease).
+            del t_ln
+            me.free_tangents()
+
+    me.free_normals_split()
 
     # Write VertexColor Layers
     # note, no programs seem to use this info :/
@@ -1011,13 +1072,14 @@ def fbx_data_mesh_elements(root, me, scene_data):
         lay_uv = elem_empty(layer, b"LayerElement")
         elem_data_single_string(lay_uv, b"Type", b"LayerElementUV")
         elem_data_single_int32(lay_uv, b"TypedIndex", 0)
-    if me_fbxmats_idx:
+    if me_fbxmats_idx is not None:
         lay_mat = elem_empty(layer, b"LayerElement")
         elem_data_single_string(lay_mat, b"Type", b"LayerElementMaterial")
         elem_data_single_int32(lay_mat, b"TypedIndex", 0)
 
     # Add other uv and/or vcol layers...
-    for vcolidx, uvidx in zip_longest(range(1, vcolnumber), range(1, uvnumber), fillvalue=0):
+    for vcolidx, uvidx, tspaceidx in zip_longest(range(1, vcolnumber), range(1, uvnumber), range(1, tspacenumber),
+                                                 fillvalue=0):
         layer = elem_data_single_int32(geom, b"Layer", max(vcolidx, uvidx))
         elem_data_single_int32(layer, b"Version", FBX_GEOMETRY_LAYER_VERSION)
         if vcolidx:
@@ -1028,6 +1090,13 @@ def fbx_data_mesh_elements(root, me, scene_data):
             lay_uv = elem_empty(layer, b"LayerElement")
             elem_data_single_string(lay_uv, b"Type", b"LayerElementUV")
             elem_data_single_int32(lay_uv, b"TypedIndex", uvidx)
+        if tspaceidx:
+            lay_binor = elem_empty(layer, b"LayerElement")
+            elem_data_single_string(lay_binor, b"Type", b"LayerElementBinormal")
+            elem_data_single_int32(lay_binor, b"TypedIndex", tspaceidx)
+            lay_tan = elem_empty(layer, b"LayerElement")
+            elem_data_single_string(lay_tan, b"Type", b"LayerElementTangent")
+            elem_data_single_int32(lay_tan, b"TypedIndex", tspaceidx)
 
 
 def fbx_data_material_elements(root, mat, scene_data):
@@ -1653,7 +1722,7 @@ FBXSettingsMedia = namedtuple("FBXSettingsMedia", (
 ))
 FBXSettings = namedtuple("FBXSettings", (
     "global_matrix", "global_scale", "context_objects", "object_types", "use_mesh_modifiers",
-    "mesh_smooth_type", "use_mesh_edges", "use_armature_deform_only",
+    "mesh_smooth_type", "use_mesh_edges", "use_tspace", "use_armature_deform_only",
     "use_anim", "use_anim_optimize", "anim_optimize_precision", "use_anim_action_all", "use_default_take",
     "use_metadata", "media_settings",
 ))
@@ -1673,6 +1742,7 @@ def save_single(operator, scene, filepath="",
                 use_metadata=True,
                 path_mode='AUTO',
                 use_mesh_edges=True,
+                use_tspace=True,
                 use_default_take=True,
                 embed_textures=False,
                 **kwargs
@@ -1701,7 +1771,7 @@ def save_single(operator, scene, filepath="",
 
     settings = FBXSettings(
         global_matrix, global_scale, context_objects, object_types, use_mesh_modifiers,
-        mesh_smooth_type, use_mesh_edges, use_armature_deform_only,
+        mesh_smooth_type, use_mesh_edges, use_tspace, use_armature_deform_only,
         use_anim, use_anim_optimize, anim_optimize_precision, use_anim_action_all, use_default_take,
         use_metadata, media_settings,
     )
