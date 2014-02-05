@@ -1199,6 +1199,7 @@ def fbx_data_texture_file_elements(root, tex, scene_data):
         elif tex.mapping in {'SPHERE'}:
             mapping = 2  # Spherical
     elif tex.texture_coords in {'UV'}:
+        # XXX *HOW* do we link to correct UVLayer???
         mapping = 6  # UV
     wrap_mode = 1  # Clamp
     if tex.texture.extension in {'REPEAT'}:
@@ -1335,15 +1336,15 @@ def fbx_mat_properties_from_texture(tex):
     Note tex is actually expected to be a texture slot.
     """
     # Tex influence does not exists in FBX, so assume influence < 0.5 = no influence... :/
-    INLUENCE_THRESHOLD = 0.5
+    INFLUENCE_THRESHOLD = 0.5
 
     tex_fbx_props = set()
     # mat is assumed to be Lambert diffuse...
-    if tex.use_map_diffuse and tex.diffuse_factor >= INLUENCE_THRESHOLD:
+    if tex.use_map_diffuse and tex.diffuse_factor >= INFLUENCE_THRESHOLD:
         tex_fbx_props.add(b"DiffuseFactor")
-    if tex.use_map_color_diffuse and tex.diffuse_color_factor >= INLUENCE_THRESHOLD:
+    if tex.use_map_color_diffuse and tex.diffuse_color_factor >= INFLUENCE_THRESHOLD:
         tex_fbx_props.add(b"Diffuse")
-    if tex.use_map_alpha and tex.alpha_factor >= INLUENCE_THRESHOLD:
+    if tex.use_map_alpha and tex.alpha_factor >= INFLUENCE_THRESHOLD:
         tex_fbx_props.add(b"TransparencyFactor")
     # etc., will complete the list later.
 
@@ -1495,8 +1496,7 @@ def fbx_data_from_scene(scene, settings):
             obj_key = objects[obj]
             connections.append((b"OO", get_fbxuid_from_key(mat_key), get_fbxuid_from_key(obj_key), None))
             # Get index of this mat for this object.
-            # XXX For now, assuming mat indices for mesh faces are determined by their order in 'mat to ob' connections.
-            #     This is only a wild guess, will have to check this!!!
+            # Mat indices for mesh faces are determined by their order in 'mat to ob' connections.
             # Only mats for meshes currently...
             me = obj.data
             idx = _objs_indices[obj] = _objs_indices.get(obj, -1) + 1
