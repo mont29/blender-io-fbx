@@ -56,10 +56,18 @@ FBX_GEOMETRY_VCOLOR_VERSION = 101
 FBX_GEOMETRY_UV_VERSION = 101
 FBX_GEOMETRY_MATERIAL_VERSION = 101
 FBX_GEOMETRY_LAYER_VERSION = 100
+FBX_POSE_BIND_VERSION = 100
+FBX_DEFORMER_SKIN_VERSION = 101
+FBX_DEFORMER_CLUSTER_VERSION = 100
 FBX_MATERIAL_VERSION = 102
 FBX_TEXTURE_VERSION = 202
 
 FBX_NAME_CLASS_SEP = b"\x00\x01"
+
+
+MAT_CONVERT_LAMP = Matrix.Rotation(math.pi / 2.0, 4, 'X')
+MAT_CONVERT_CAMERA = Matrix.Rotation(math.pi / 2.0, 4, 'Y')
+MAT_CONVERT_BONE = Matrix.Rotation(math.pi / 2.0, 4, 'Z')
 
 
 # Lamps.
@@ -77,14 +85,6 @@ FBX_LIGHT_DECAY_TYPES = {
     'CUSTOM_CURVE': 2,               # Quadratic.
     'LINEAR_QUADRATIC_WEIGHTED': 2,  # Quadratic.
 }
-
-
-# Default global matrix.
-MTX_GLOB = Matrix()
-# Used for camera and lamp rotations.
-MTX_X90 = Matrix.Rotation(math.pi / 2.0, 3, 'X')
-# Used for mesh and armature rotations.
-MTX4_Z90 = Matrix.Rotation(math.pi / 2.0, 4, 'Z')
 
 
 ##### Misc utilities #####
@@ -109,6 +109,12 @@ def units_convert(val, u_from, u_to):
         return (v * conv for v in val)
     except:
         return val * conv
+
+
+def matrix_to_array(mat):
+    """Concatenate matrix's columns into a single, flat tuple"""
+    return tuple(chain(*mat.col))
+
 
 ##### UIDs code. #####
 
@@ -175,7 +181,29 @@ def get_blenderID_key(bid):
 def get_blender_camera_keys(cam):
     """Return cam + cam switcher keys."""
     key = get_blenderID_key(cam)
-    return key, key + "_switcher", key + "_switcher_object"
+    return key, key + "_Switcher", key + "_SwitcherObject"
+
+
+def get_blender_bone_key(armature, bone):
+    """Return bone's keys (Model and NodeAttribute)."""
+    key = "|".join((get_blenderID_key(armature), get_blenderID_key(bone)))
+    return key, key + "_Data"
+
+
+def get_blender_armature_bindpose_key(armature, mesh):
+    """Return armature's bindpose key."""
+    return "|".join((get_blenderID_key(armature), get_blenderID_key(mesh), "BindPose"))
+
+
+def get_blender_armature_skin_key(armature, mesh):
+    """Return armature's skin key."""
+    return "|".join((get_blenderID_key(armature), get_blenderID_key(mesh), "DeformerSkin"))
+
+
+def get_blender_bone_cluster_key(armature, mesh, bone):
+    """Return bone's cluster key."""
+    return "|".join((get_blenderID_key(armature), get_blenderID_key(mesh),
+                     get_blenderID_key(bone), "SubDeformerCluster"))
 
 
 ##### Element generators. #####
@@ -388,7 +416,7 @@ def fbx_template_def_model(scene, settings, override_defaults=None, nbr_users=0)
         b"TranslationMaxX": (False, "p_bool"),
         b"TranslationMaxY": (False, "p_bool"),
         b"TranslationMaxZ": (False, "p_bool"),
-        b"RotationOrder": (0, "p_enum"),  # 'XYZ'
+        b"RotationOrder": (0, "p_enum"),  # we always use 'XYZ' order.
         b"RotationSpaceForLimitOnly": (False, "p_bool"),
         b"RotationStiffnessX": (0.0, "p_number"),
         b"RotationStiffnessY": (0.0, "p_number"),
@@ -405,7 +433,7 @@ def fbx_template_def_model(scene, settings, override_defaults=None, nbr_users=0)
         b"RotationMaxX": (False, "p_bool"),
         b"RotationMaxY": (False, "p_bool"),
         b"RotationMaxZ": (False, "p_bool"),
-        b"InheritType": (0, "p_enum"),
+        b"InheritType": (1, "p_enum"),  # RSrs
         b"ScalingActive": (False, "p_bool"),
         b"ScalingMin": (Vector((1.0, 1.0, 1.0)) * gscale, "p_vector_3d"),
         b"ScalingMax": (Vector((1.0, 1.0, 1.0)) * gscale, "p_vector_3d"),
@@ -594,47 +622,39 @@ def fbx_template_def_pose(gmat, gscale, override_defaults=None, nbr_users=0):
 
 ##### FBX objects generators. #####
 
-def object_tx(ob, scene_data):
+def object_tx(obj, scene_data):
     """
     Generate object transform data (in parent space if parent exists and is exported, else in world space).
     Applies specific rotation to lamps and cameras (conversion Blender -> FBX).
+    Also handle bones!
     """
-    matrix = ob.matrix_world
+    if isinstance(obj, bpy.types.Object):
+        matrix = obj.matrix_world
 
-    if ob.parent and ob.parent in scene_data.objects:
-        # We only want transform relative to parent if parent is also exported!
-        matrix = ob.matrix_local
-    else:
-        # Only apply global transform (global space) to 'root' objects!
-        matrix = scene_data.settings.global_matrix * matrix
+        if obj.parent and obj.parent in scene_data.objects:
+            # We only want transform relative to parent if parent is also exported!
+            matrix = obj.matrix_local
+        else:
+            # Only apply global transform (global space) to 'root' objects!
+            matrix = scene_data.settings.global_matrix * matrix
+
+        # Lamps and camera need to be rotated.
+        if obj.type == 'LAMP':
+            matrix = matrix * MAT_CONVERT_LAMP
+        elif obj.type == 'CAMERA':
+            matrix = matrix * MAT_CONVERT_CAMERA
+
+    else:  # bone
+        bone = obj
+        matrix = bone.matrix_local * MAT_CONVERT_BONE
+
+        if bone.parent:
+            par_matrix = bone.parent.matrix_local * MAT_CONVERT_BONE
+            matrix = par_matrix.inverted() * matrix
 
     loc, rot, scale = matrix.decompose()
     matrix_rot = rot.to_matrix()
-
-    # Lamps and camera need to be rotated.
-    if ob.type == 'LAMP':
-        matrix_rot = matrix_rot * Matrix.Rotation(math.pi / 2.0, 3, 'X')
-    elif ob.type == 'CAMERA':
-        matrix_rot = matrix_rot * Matrix.Rotation(math.pi / 2.0, 3, 'Y')
-
-    rot = matrix_rot.to_euler()
-
-    return loc, rot, scale, matrix, matrix_rot
-
-
-def bone_tx(bone, scene_data):
-    """
-    Generate bone transform data (in parent space one if any, else in armature space).
-    """
-    matrix = bone.matrix_local * MTX4_Z90
-
-    if bone.parent:
-        par_matrix = bone.parent.matrix_local * MTX4_Z90
-        matrix = par_matrix.inverted() * matrix
-
-    loc, rot, scale = matrix.decompose()
-    matrix_rot = rot.to_matrix()
-    rot = rot.to_euler()  # quat -> euler
+    rot = rot.to_euler()  # quat -> euler (we always use 'XYZ' order!).
 
     return loc, rot, scale, matrix, matrix_rot
 
@@ -1026,7 +1046,6 @@ def fbx_data_mesh_elements(root, me, scene_data):
     me_fbxmats_idx = None
     if me in scene_data.mesh_mat_indices:
         me_fbxmats_idx = scene_data.mesh_mat_indices[me]
-        print(me_fbxmats_idx)
         me_blmats = me.materials
         if me_fbxmats_idx and me_blmats:
             lay_mat = elem_data_single_int32(geom, b"LayerElementMaterial", 0)
@@ -1245,15 +1264,107 @@ def fbx_data_video_elements(root, vid, scene_data):
         elem_data_single_byte_array(fbx_vid, b"Content", b"")
 
 
+def fbx_data_armature_elements(root, armature, scene_data):
+    """
+    Write:
+        * Bones "data" (NodeAttribute::LimbNode, contains pretty much nothing!).
+        * Deformers (i.e. Skin), bind between an armature and a mesh.
+        ** SubDeformers (i.e. Cluster), one per bone/vgroup pair.
+        * BindPose.
+    Note armature itself has no data, it is a mere "Null" Model...
+    """
+
+    # Bones "data".
+    for bo in armature.data.bones:
+        _bo_key, bo_data_key, _arm = scene_data.data_bones[bo]
+        fbx_bo = elem_data_single_int64(root, b"NodeAttribute", get_fbxuid_from_key(bo_data_key))
+        fbx_bo.add_string(fbx_name_class(bo.name.encode(), b"NodeAttribute"))
+        fbx_bo.add_string(b"LimbNode")
+        elem_data_single_string(fbx_bo, b"TypeFlags", b"Skeleton")    
+
+    # Deformers and BindPoses.
+    # Note: we might also use Deformers for our "parent to vertex" stuff???
+    deformer = scene_data.data_deformers.get(armature, None)
+    if deformer is not None:
+        for me, (skin_key, obj, clusters) in deformer.items():
+            # BindPose.
+            # We assume bind pose for our bones are their "Editmode" pose...
+            # All matrices are expected in global (world) space.
+            bindpose_key = get_blender_armature_bindpose_key(armature, me)
+            fbx_pose = elem_data_single_int64(root, b"Pose", get_fbxuid_from_key(bindpose_key))
+            fbx_pose.add_string(fbx_name_class(me.name.encode(), b"Pose"))
+            fbx_pose.add_string(b"BindPose")
+
+            elem_data_single_string(fbx_pose, b"Type", b"BindPose")
+            elem_data_single_int32(fbx_pose, b"Version", FBX_POSE_BIND_VERSION)
+            elem_data_single_int32(fbx_pose, b"NbPoseNodes", 1 + len(armature.data.bones))
+
+            # First node is mesh/object.
+            mat_world_obj = matrix_to_array(obj.matrix_world)
+            fbx_posenode = elem_empty(fbx_pose, b"PoseNode")
+            elem_data_single_int64(fbx_posenode, b"Node", get_fbxuid_from_key(scene_data.objects[obj]))
+            elem_data_single_float64_array(fbx_posenode, b"Matrix", mat_world_obj)
+            # And all bones of armature!
+            armmat = armature.matrix_world
+            mat_world_bones = {}
+            for bo in armature.data.bones:
+                bomat = matrix_to_array(armmat * bo.matrix_local * MAT_CONVERT_BONE)
+                mat_world_bones[bo] = bomat
+                fbx_posenode = elem_empty(fbx_pose, b"PoseNode")
+                elem_data_single_int64(fbx_posenode, b"Node", get_fbxuid_from_key(scene_data.objects[bo]))
+                elem_data_single_float64_array(fbx_posenode, b"Matrix", bomat)
+
+            # Deformer.
+            fbx_skin = elem_data_single_int64(root, b"Deformer", get_fbxuid_from_key(skin_key))
+            fbx_skin.add_string(fbx_name_class(armature.name.encode(), b"Deformer"))
+            fbx_skin.add_string(b"Skin")
+
+            elem_data_single_int32(fbx_skin, b"Version", FBX_DEFORMER_SKIN_VERSION)
+            elem_data_single_float64(fbx_skin, b"Link_DeformAcuracy", 50.0)  # Only vague idea what it is...
+
+            for bo, clstr_key in clusters.items():
+                # Find which vertices are affected by this bone/vgroup pair, and matching weights.
+                indices = [];
+                weights = [];
+                vg_idx = obj.vertex_groups[bo.name].index
+                for idx, v in enumerate(me.vertices):
+                    print(vg_idx, [vg.group for vg in v.groups])
+                    vert_vg = [vg for vg in v.groups if vg.group == vg_idx]
+                    if not vert_vg:
+                        continue
+                    indices.append(idx)
+                    weights.append(vert_vg[0].weight)
+
+                # Create the cluster.
+                fbx_clstr = elem_data_single_int64(root, b"Deformer", get_fbxuid_from_key(clstr_key))
+                fbx_clstr.add_string(fbx_name_class(bo.name.encode(), b"SubDeformer"))
+                fbx_clstr.add_string(b"Cluster")
+
+                elem_data_single_int32(fbx_clstr, b"Version", FBX_DEFORMER_CLUSTER_VERSION)
+                # No idea what that user data might be...
+                fbx_userdata = elem_data_single_string(fbx_clstr, b"UserData", b"")
+                fbx_userdata.add_string(b"")
+                if indices:
+                    elem_data_single_int32_array(fbx_clstr, b"Indexes", indices)
+                    elem_data_single_float64_array(fbx_clstr, b"Weights", weights)
+                # Transform and TransformLink matrices...
+                # They seem to be mostly the same as BindPose ones???
+                elem_data_single_float64_array(fbx_clstr, b"Transform", mat_world_obj)
+                elem_data_single_float64_array(fbx_clstr, b"TransformLink", mat_world_bones[bo])
+
+
 def fbx_data_object_elements(root, obj, scene_data):
     """
     Write the Object (Model) data blocks.
+    Note we handle "Model" part of bones as well here!
     """
     gscale = scene_data.settings.global_scale
     gmat = scene_data.settings.global_matrix
 
     obj_type = b"Null"  # default, sort of empty...
-    if (obj.type == 'MESH'):
+    if isinstance(obj, bpy.types.Bone):
+        obj_type = b"LimbNode"
+    elif (obj.type == 'MESH'):
         obj_type = b"Mesh"
     elif (obj.type == 'LAMP'):
         obj_type = b"Light"
@@ -1277,6 +1388,8 @@ def fbx_data_object_elements(root, obj, scene_data):
     elem_props_template_set(tmpl, props, "p_lcl_rotation", b"Lcl Rotation", rot)
     elem_props_template_set(tmpl, props, "p_lcl_scaling", b"Lcl Scaling", scale)
 
+    # TODO: "constraints" (limit loc/rot/scale, and target-to-object).
+
     # Those settings would obviously need to be edited in a complete version of the exporter, may depends on
     # object type, etc.
     elem_data_single_int32(model, b"MultiLayer", 0)
@@ -1284,7 +1397,7 @@ def fbx_data_object_elements(root, obj, scene_data):
     elem_data_single_bool(model, b"Shading", True)
     elem_data_single_string(model, b"Culling", b"CullingOff")
 
-    if obj.type == 'CAMERA':
+    if isinstance(obj, bpy.types.Object) and obj.type == 'CAMERA':
         # Why, oh why are FBX cameras such a mess???
         # And WHY add camera data HERE??? Not even sure this is needed...
         render = scene_data.scene.render
@@ -1325,6 +1438,7 @@ FBXData = namedtuple("FBXData", (
     "templates", "templates_users", "connections",
     "settings", "scene", "objects",
     "data_lamps", "data_cameras", "data_meshes", "mesh_mat_indices",
+    "data_bones", "data_deformers",
     "data_world", "data_materials", "data_textures", "data_videos",
 ))
 
@@ -1351,6 +1465,55 @@ def fbx_mat_properties_from_texture(tex):
     return tex_fbx_props
 
 
+def fbx_skeleton_from_armature(scene, settings, armature, objects, data_bones, data_deformers):
+    """
+    Create skeleton from armature/bones (NodeAttribute/LimbNode and Model/LimbNode), and for each deformed mesh,
+    create Pose/BindPose(with sub PoseNode) and Deformer/Skin(with Deformer/SubDeformer/Cluster).
+    Also supports "parent to bone" (simple parent to Model/LimbNode).
+    """
+    arm = armature.data
+    bones = {}
+    for bo in arm.bones:
+        key, data_key = get_blender_bone_key(armature, bo)
+        objects[bo] = key
+        data_bones[bo] = (key, data_key, armature)
+        bones[bo.name] = bo
+
+    for obj in objects.keys():
+        if not isinstance(obj, bpy.types.Object):
+            continue
+        if obj.type not in {'MESH'}:
+            continue
+        if obj.parent != armature:
+            continue
+
+        # Always handled by an Armature modifier...
+        found = False
+        for mod in obj.modifiers:
+            if mod.type not in {'ARMATURE'}:
+                continue
+            # We only support vertex groups binding method, not bone envelopes one!
+            if mod.object == armature and mod.use_vertex_groups:
+                found = True
+                break
+
+        if not found:
+            continue
+
+        # Now we have a mesh using this armature. First, find out which bones are concerned!
+        # XXX Assuming here non-used bones can have no cluster, this has to be checked!
+        used_bones = tuple(bones[vg.name] for vg in obj.vertex_groups if vg.name in bones)
+        if not used_bones:
+            continue
+
+        # Note: bindpose have no relations at all (no connections), so no need for any preprocess for them.
+
+        # Create skin & clusters relations (note skins are connected to geometry, *not* model!).
+        me = obj.data
+        clusters = {bo: get_blender_bone_cluster_key(armature, me, bo) for bo in used_bones}
+        data_deformers.setdefault(armature, {})[me] = (get_blender_armature_skin_key(armature, me), obj, clusters)
+
+
 def fbx_data_from_scene(scene, settings):
     """
     Do some pre-processing over scene's data...
@@ -1367,6 +1530,14 @@ def fbx_data_from_scene(scene, settings):
     data_cameras = {obj: get_blender_camera_keys(obj.data) for obj in objects if obj.type == 'CAMERA'}
     data_meshes = {obj.data: get_blenderID_key(obj.data) for obj in objects if obj.type == 'MESH'}
 
+    # Armatures!
+    data_bones = {}
+    data_deformers = {}
+    for obj in tuple(objects.keys()):
+        if obj.type not in {'ARMATURE'}:
+            continue
+        fbx_skeleton_from_armature(scene, settings, obj, objects, data_bones, data_deformers)
+
     # Some world settings are embedded in FBX materials...
     if scene.world:
         data_world = {scene.world: get_blenderID_key(scene.world)}
@@ -1376,10 +1547,11 @@ def fbx_data_from_scene(scene, settings):
     # TODO: Check all the mat stuff works even when mats are linked to Objects
     #       (we can then have the same mesh used with different materials...).
     #       *Should* work, as FBX always links its materials to Models (i.e. objects).
+    #       XXX However, material indices would probably break...
     data_materials = {}
     for obj in objects:
         # Only meshes for now!
-        if obj.type not in {'MESH'}:
+        if not isinstance(obj, bpy.types.Object) or obj.type not in {'MESH'}:
             continue
         for mat_s in obj.material_slots:
             mat = mat_s.material
@@ -1466,14 +1638,33 @@ def fbx_data_from_scene(scene, settings):
 
     connections = []
 
+    # Objects (with classical parenting).
     for obj, obj_key in objects.items():
-        par = obj.parent
-        par_key = 0
-        if par and par in objects:
-            # TODO: Check this is the correct way to have object parenting!
-            par_key = objects[par]
-        connections.append((b"OO", get_fbxuid_from_key(obj_key), get_fbxuid_from_key(par_key), None))
+        # Bones are handled later.
+        if isinstance(obj, bpy.types.Object):
+            par = obj.parent
+            par_key = 0  # Convention, "top" node... ? Or root of Document?
+            if par and par in objects:
+                par_type = obj.parent_type
+                if par_type in {'OBJECT', 'BONE'}:
+                    # XXX Meshes parented to armature also have 'OBJECT' par_type, have to check whether this
+                    #     extra-parenting is an issue or not!
+                    par_key = objects[par]
+                else:
+                    printf("Sorry, “{}” parenting type is not supported".format(par_type))
+            connections.append((b"OO", get_fbxuid_from_key(obj_key), get_fbxuid_from_key(par_key), None))
 
+    # Armature & Bone chains.
+    for bo, (bo_key, _bo_data_key, arm) in data_bones.items():
+        par = bo.parent
+        if not par:  # Root bone.
+            par = arm
+        if par not in objects:
+            continue
+        connections.append((b"OO", get_fbxuid_from_key(bo_key), get_fbxuid_from_key(objects[par]), None))
+
+    # Cameras
+    # XXX CamSwitcher do not seem to be needed anymore!
     for obj_cam, (cam_key, cam_switcher_key, cam_obj_switcher_key) in data_cameras.items():
         # Looks like the 'object' ('Model' in FBX) for the camera switcher is not linked to anything in FBX...
         connections.append((b"OO", get_fbxuid_from_key(cam_switcher_key), get_fbxuid_from_key(cam_obj_switcher_key),
@@ -1481,14 +1672,31 @@ def fbx_data_from_scene(scene, settings):
         cam_obj_key = objects[obj_cam]
         connections.append((b"OO", get_fbxuid_from_key(cam_key), get_fbxuid_from_key(cam_obj_key), None))
 
+    # Object data.
     for obj, obj_key in objects.items():
-        if obj.type == 'LAMP':
+        if isinstance(obj, bpy.types.Bone):
+            _bo_key, bo_data_key, _arm = data_bones[obj]
+            assert(_bo_key == obj_key)
+            connections.append((b"OO", get_fbxuid_from_key(bo_data_key), get_fbxuid_from_key(obj_key), None))
+        elif obj.type == 'LAMP':
             lamp_key = data_lamps[obj.data]
             connections.append((b"OO", get_fbxuid_from_key(lamp_key), get_fbxuid_from_key(obj_key), None))
         elif obj.type == 'MESH':
             mesh_key = data_meshes[obj.data]
             connections.append((b"OO", get_fbxuid_from_key(mesh_key), get_fbxuid_from_key(obj_key), None))
 
+    # Deformers (armature-to-geometry, only for meshes currently)...
+    for arm, deformed_meshes in data_deformers.items():
+        for me, (skin_key, _obj, clusters) in deformed_meshes.items():
+            # skin -> geometry
+            connections.append((b"OO", get_fbxuid_from_key(skin_key), get_fbxuid_from_key(data_meshes[me]), None))
+            for bo, clstr_key in clusters.items():
+                # cluster -> skin
+                connections.append((b"OO", get_fbxuid_from_key(clstr_key), get_fbxuid_from_key(skin_key), None))
+                # bone -> cluster
+                connections.append((b"OO", get_fbxuid_from_key(objects[bo]), get_fbxuid_from_key(clstr_key), None))
+
+    # Materials
     mesh_mat_indices = {}
     _objs_indices = {}
     for mat, (mat_key, objs) in data_materials.items():
@@ -1503,12 +1711,15 @@ def fbx_data_from_scene(scene, settings):
             mesh_mat_indices.setdefault(me, {})[mat] = idx
     del _objs_indices
 
+    # Textures
     for tex, (tex_key, mats) in data_textures.items():
         for mat, fbx_mat_props in mats.items():
             mat_key, _objs = data_materials[mat]
             for fbx_prop in fbx_mat_props:
+                # texture -> material properties
                 connections.append((b"OP", get_fbxuid_from_key(tex_key), get_fbxuid_from_key(mat_key), fbx_prop))
 
+    # Images
     for vid, (vid_key, texs) in data_videos.items():
         for tex in texs:
             tex_key, _texs = data_textures[tex]
@@ -1520,6 +1731,7 @@ def fbx_data_from_scene(scene, settings):
         templates, templates_users, connections,
         settings, scene, objects,
         data_lamps, data_cameras, data_meshes, mesh_mat_indices,
+        data_bones, data_deformers,
         data_world, data_materials, data_textures, data_videos,
     )
 
@@ -1644,7 +1856,7 @@ def fbx_documents_elements(root, scene_data):
     elem_props_set(props, "p_object", b"SourceObject")
     elem_props_set(props, "p_string", b"ActiveAnimStackName", "")
 
-    # XXX Probably some kind of offset? Binary one?
+    # XXX Some kind of ID? Offset?
     #     Anyway, as long as we have only one doc, probably not an issue.
     elem_data_single_int64(doc, b"RootNode", 0)
 
@@ -1686,6 +1898,11 @@ def fbx_objects_elements(root, scene_data):
 
     for obj in scene_data.objects.keys():
         fbx_data_object_elements(objects, obj, scene_data)
+
+    for obj in scene_data.objects.keys():
+        if not isinstance(obj, bpy.types.Object) or obj.type not in {'ARMATURE'}:
+            continue
+        fbx_data_armature_elements(objects, obj, scene_data)
 
     for mat in scene_data.data_materials.keys():
         fbx_data_material_elements(objects, mat, scene_data)
@@ -1729,7 +1946,7 @@ FBXSettings = namedtuple("FBXSettings", (
 
 # This func can be called with just the filepath
 def save_single(operator, scene, filepath="",
-                global_matrix=MTX_GLOB,
+                global_matrix=Matrix(),
                 context_objects=None,
                 object_types=None,
                 use_mesh_modifiers=True,
@@ -1750,8 +1967,8 @@ def save_single(operator, scene, filepath="",
 
     if object_types is None:
         # XXX Temp, during dev...
-        object_types = {'EMPTY', 'CAMERA', 'LAMP', 'MESH'}
-        #object_types = {'EMPTY', 'CAMERA', 'LAMP', 'ARMATURE', 'MESH'}
+        #object_types = {'EMPTY', 'CAMERA', 'LAMP', 'MESH'}
+        object_types = {'EMPTY', 'CAMERA', 'LAMP', 'ARMATURE', 'MESH'}
 
     global_scale = global_matrix.median_scale
 
