@@ -381,15 +381,27 @@ def elem_connection(elem, c_type, uid_src, uid_dst, prop_dst=None):
 FBXTemplate = namedtuple("FBXTemplate", ("type_name", "prop_type_name", "properties", "nbr_users"))
 
 
-def fbx_template_generate(root, fbx_template):
-    template = elem_data_single_string(root, b"ObjectType", fbx_template.type_name)
-    elem_data_single_int32(template, b"Count", fbx_template.nbr_users)
+def fbx_templates_generate(root, fbx_templates):
+    # We may have to gather different templates in the same node (e.g. NodeAttribute template gathers properties
+    # for Lights, Cameras, LibNodes, etc.).
+    templates = OrderedDict()
+    for type_name, prop_type_name, properties, nbr_users in fbx_templates.values():
+        if type_name not in templates:
+            templates[type_name] = [OrderedDict(((prop_type_name, properties),)), nbr_users]
+        else:
+            templates[type_name][0][prop_type_name] = properties
+            templates[type_name][1] += nbr_users
 
-    if fbx_template.properties:
-        elem = elem_data_single_string(template, b"PropertyTemplate", fbx_template.prop_type_name)
-        props = elem_properties(elem)
-        for name, (value, ptype) in fbx_template.properties.items():
-            elem_props_set(props, ptype, name, value)
+    for type_name, (subprops, nbr_users) in templates.items():
+        template = elem_data_single_string(root, b"ObjectType", type_name)
+        elem_data_single_int32(template, b"Count", nbr_users)
+
+        for prop_type_name, properties in subprops.items():
+            if prop_type_name and properties:
+                elem = elem_data_single_string(template, b"PropertyTemplate", prop_type_name)
+                props = elem_properties(elem)
+                for name, (value, ptype) in properties.items():
+                    elem_props_set(props, ptype, name, value)
 
 
 def fbx_template_def_globalsettings(scene, settings, override_defaults=None, nbr_users=0):
@@ -513,6 +525,13 @@ def fbx_template_def_cameraswitcher(scene, settings, override_defaults=None, nbr
     return FBXTemplate(b"NodeAttribute", b"FbxCameraSwitcher", props, nbr_users)
 
 
+def fbx_template_def_bone(gmat, gscale, override_defaults=None, nbr_users=0):
+    props = {}
+    if override_defaults is not None:
+        props.update(override_defaults)
+    return FBXTemplate(b"NodeAttribute", b"LimbNode", props, nbr_users)
+
+
 def fbx_template_def_geometry(scene, settings, override_defaults=None, nbr_users=0):
     props = {
         b"Color": ((0.8, 0.8, 0.8), "p_color_rgb"),
@@ -618,6 +637,13 @@ def fbx_template_def_pose(gmat, gscale, override_defaults=None, nbr_users=0):
     if override_defaults is not None:
         props.update(override_defaults)
     return FBXTemplate(b"Pose", b"", props, nbr_users)
+
+
+def fbx_template_def_deformer(gmat, gscale, override_defaults=None, nbr_users=0):
+    props = {}
+    if override_defaults is not None:
+        props.update(override_defaults)
+    return FBXTemplate(b"Deformer", b"", props, nbr_users)
 
 
 ##### FBX objects generators. #####
@@ -1465,11 +1491,12 @@ def fbx_mat_properties_from_texture(tex):
     return tex_fbx_props
 
 
-def fbx_skeleton_from_armature(scene, settings, armature, objects, data_bones, data_deformers):
+def fbx_skeleton_from_armature(scene, settings, armature, objects, data_bones, data_deformers, arm_parents):
     """
     Create skeleton from armature/bones (NodeAttribute/LimbNode and Model/LimbNode), and for each deformed mesh,
     create Pose/BindPose(with sub PoseNode) and Deformer/Skin(with Deformer/SubDeformer/Cluster).
     Also supports "parent to bone" (simple parent to Model/LimbNode).
+    arm_parents is a set of tuples (armature, object) for all successful armature bindings.
     """
     arm = armature.data
     bones = {}
@@ -1513,6 +1540,9 @@ def fbx_skeleton_from_armature(scene, settings, armature, objects, data_bones, d
         clusters = {bo: get_blender_bone_cluster_key(armature, me, bo) for bo in used_bones}
         data_deformers.setdefault(armature, {})[me] = (get_blender_armature_skin_key(armature, me), obj, clusters)
 
+        # We don't want a regular parent relationship for those in FBX...
+        arm_parents.add((armature, obj))
+
 
 def fbx_data_from_scene(scene, settings):
     """
@@ -1533,10 +1563,11 @@ def fbx_data_from_scene(scene, settings):
     # Armatures!
     data_bones = {}
     data_deformers = {}
+    arm_parents = set()
     for obj in tuple(objects.keys()):
         if obj.type not in {'ARMATURE'}:
             continue
-        fbx_skeleton_from_armature(scene, settings, obj, objects, data_bones, data_deformers)
+        fbx_skeleton_from_armature(scene, settings, obj, objects, data_bones, data_deformers, arm_parents)
 
     # Some world settings are embedded in FBX materials...
     if scene.world:
@@ -1610,12 +1641,23 @@ def fbx_data_from_scene(scene, settings):
         templates[b"Camera"] = fbx_template_def_camera(scene, settings, nbr_users=nbr)
         templates[b"CameraSwitcher"] = fbx_template_def_cameraswitcher(scene, settings, nbr_users=nbr)
 
+    if data_bones:
+        templates[b"Bone"] = fbx_template_def_bone(scene, settings, nbr_users=len(data_bones))
+
     if data_meshes:
         templates[b"Geometry"] = fbx_template_def_geometry(scene, settings, nbr_users=len(data_meshes))
 
     if objects:
         # We use len(object) + len(data_cameras) because of the CameraSwitcher objects...
         templates[b"Model"] = fbx_template_def_model(scene, settings, nbr_users=len(objects) + len(data_cameras))
+
+    if arm_parents:
+        # Number of Pose|BindPose elements should be the same as number of meshes-parented-to-armatures
+        templates[b"BindPose"] = fbx_template_def_pose(scene, settings, nbr_users=len(arm_parents))
+
+    if data_deformers:
+        nbr = len(data_deformers) + sum(len(clusters) for def_me in data_deformers.values() for a, b, clusters in def_me.values())
+        templates[b"Deformers"] = fbx_template_def_deformer(scene, settings, nbr_users=nbr)
 
     # No world support in FBX...
     """
@@ -1647,9 +1689,10 @@ def fbx_data_from_scene(scene, settings):
             if par and par in objects:
                 par_type = obj.parent_type
                 if par_type in {'OBJECT', 'BONE'}:
-                    # XXX Meshes parented to armature also have 'OBJECT' par_type, have to check whether this
-                    #     extra-parenting is an issue or not!
-                    par_key = objects[par]
+                    # Meshes parented to armature also have 'OBJECT' par_type, in FBX this is handled separately,
+                    # we do not want an extra object parenting!
+                    if (par, obj) not in arm_parents:
+                        par_key = objects[par]
                 else:
                     printf("Sorry, “{}” parenting type is not supported".format(par_type))
             connections.append((b"OO", get_fbxuid_from_key(obj_key), get_fbxuid_from_key(par_key), None))
@@ -1877,8 +1920,7 @@ def fbx_definitions_elements(root, scene_data):
     elem_data_single_int32(definitions, b"Version", FBX_TEMPLATES_VERSION)
     elem_data_single_int32(definitions, b"Count", scene_data.templates_users)
 
-    for tmpl in scene_data.templates.values():
-        fbx_template_generate(definitions, tmpl)
+    fbx_templates_generate(definitions, scene_data.templates)
 
 
 def fbx_objects_elements(root, scene_data):
