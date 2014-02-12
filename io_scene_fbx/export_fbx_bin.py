@@ -648,39 +648,56 @@ def fbx_template_def_deformer(scene, settings, override_defaults=None, nbr_users
 
 ##### FBX objects generators. #####
 
-def object_tx(obj, scene_data):
+def object_matrix(scene_data, obj, armature=None, global_space=False):
     """
-    Generate object transform data (in parent space if parent exists and is exported, else in world space).
-    Applies specific rotation to lamps and cameras (conversion Blender -> FBX).
-    Also handle bones!
+    Generate object transform matrix.
+    If global_space is False, returned matrix is in parent space if parent exists and is exported, else in world space.
+    If global_space is True, returned matrix is always in world space.
+    If obj is a bone, and global_space is True, armature must be provided (it's the bone's armature object!).
+    Applies specific rotation to bones, lamps and cameras (conversion Blender -> FBX).
     """
-    if isinstance(obj, bpy.types.Object):
-        matrix = obj.matrix_world
+    is_bone = isinstance(obj, bpy.types.Bone)
+    # Objects which are not bones and do not have any parent are *always* in global space!
+    is_global = global_space or not (is_bone or (obj.parent and obj.parent in scene_data.objects))
 
-        if obj.parent and obj.parent in scene_data.objects:
-            # We only want transform relative to parent if parent is also exported!
-            matrix = obj.matrix_local
-        else:
-            # Only apply global transform (global space) to 'root' objects!
-            matrix = scene_data.settings.global_matrix * matrix
+    #assert((is_bone and is_global and armature is None) == False,
+           #"You must provide an armature object to get bones transform matrix in global space!")
 
-        # Lamps and camera need to be rotated.
-        if obj.type == 'LAMP':
-            matrix = matrix * MAT_CONVERT_LAMP
-        elif obj.type == 'CAMERA':
-            matrix = matrix * MAT_CONVERT_CAMERA
+    matrix = obj.matrix_local
 
-    else:  # bone
-        bone = obj
-        matrix = bone.matrix_local * MAT_CONVERT_BONE
+    # Lamps, cameras and bones need to be rotated (in local space!).
+    if is_bone:
+        matrix = matrix * MAT_CONVERT_BONE
+    elif obj.type == 'LAMP':
+        matrix = matrix * MAT_CONVERT_LAMP
+    elif obj.type == 'CAMERA':
+        matrix = matrix * MAT_CONVERT_CAMERA
 
-        if bone.parent:
-            par_matrix = bone.parent.matrix_local * MAT_CONVERT_BONE
+    # Up till here, our matrix is in local space, time to bring them in their final desired space.
+    if is_bone:
+        # Bones are in armature (object) space currently, either bring them to global space or real
+        # local space (relative to parent bone).
+        if is_global:
+            matrix = scene_data.settings.global_matrix * armature.matrix_world * matrix
+        elif obj.parent:  # Parent bone, get matrix relative to it.
+            par_matrix = obj.parent.matrix_local * MAT_CONVERT_BONE
             matrix = par_matrix.inverted() * matrix
+    elif is_global:
+        if obj.parent:
+            matrix = obj.parent.matrix_world * matrix
+        matrix = scene_data.settings.global_matrix * matrix
 
+    return matrix
+
+
+def object_tx(scene_data, obj):
+    """
+    Generate object transform data (always in local space when possible).
+    """
+    matrix = object_matrix(scene_data, obj)
     loc, rot, scale = matrix.decompose()
     matrix_rot = rot.to_matrix()
-    rot = rot.to_euler()  # quat -> euler (we always use 'XYZ' order!).
+    rot = rot.to_euler()  # quat -> euler, we always use 'XYZ' order.
 
     return loc, rot, scale, matrix, matrix_rot
 
@@ -755,7 +772,7 @@ def fbx_data_camera_elements(root, cam_obj, scene_data):
 
     # Real data now, good old camera!
     # Object transform info.
-    loc, rot, scale, matrix, matrix_rot = object_tx(cam_obj, scene_data)
+    loc, rot, scale, matrix, matrix_rot = object_tx(scene_data, cam_obj)
     up = matrix_rot * Vector((0.0, 1.0, 0.0))
     to = matrix_rot * Vector((0.0, 0.0, -1.0))
     # Render settings.
@@ -1324,15 +1341,14 @@ def fbx_data_armature_elements(root, armature, scene_data):
             elem_data_single_int32(fbx_pose, b"NbPoseNodes", 1 + len(armature.data.bones))
 
             # First node is mesh/object.
-            mat_world_obj = obj.matrix_world
+            mat_world_obj = object_matrix(scene_data, obj, global_space=True)
             fbx_posenode = elem_empty(fbx_pose, b"PoseNode")
             elem_data_single_int64(fbx_posenode, b"Node", get_fbxuid_from_key(scene_data.objects[obj]))
             elem_data_single_float64_array(fbx_posenode, b"Matrix", matrix_to_array(mat_world_obj))
             # And all bones of armature!
-            armmat = armature.matrix_world
             mat_world_bones = {}
             for bo in armature.data.bones:
-                bomat = armmat * bo.matrix_local * MAT_CONVERT_BONE
+                bomat = object_matrix(scene_data, bo, armature, global_space=True)
                 mat_world_bones[bo] = bomat
                 fbx_posenode = elem_empty(fbx_pose, b"PoseNode")
                 elem_data_single_int64(fbx_posenode, b"Node", get_fbxuid_from_key(scene_data.objects[bo]))
@@ -1352,7 +1368,6 @@ def fbx_data_armature_elements(root, armature, scene_data):
                 weights = [];
                 vg_idx = obj.vertex_groups[bo.name].index
                 for idx, v in enumerate(me.vertices):
-                    print(vg_idx, [vg.group for vg in v.groups])
                     vert_vg = [vg for vg in v.groups if vg.group == vg_idx]
                     if not vert_vg:
                         continue
@@ -1403,7 +1418,7 @@ def fbx_data_object_elements(root, obj, scene_data):
     elem_data_single_int32(model, b"Version", FBX_MODELS_VERSION)
 
     # Object transform info.
-    loc, rot, scale, matrix, matrix_rot = object_tx(obj, scene_data)
+    loc, rot, scale, matrix, matrix_rot = object_tx(scene_data, obj)
     rot = tuple(units_convert(rot, "radian", "degree"))
 
     tmpl = scene_data.templates[b"Model"]
@@ -1693,7 +1708,7 @@ def fbx_data_from_scene(scene, settings):
                     if (par, obj) not in arm_parents:
                         par_key = objects[par]
                 else:
-                    printf("Sorry, “{}” parenting type is not supported".format(par_type))
+                    print("Sorry, “{}” parenting type is not supported".format(par_type))
             connections.append((b"OO", get_fbxuid_from_key(obj_key), get_fbxuid_from_key(par_key), None))
 
     # Armature & Bone chains.
