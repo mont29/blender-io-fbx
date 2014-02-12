@@ -1326,19 +1326,19 @@ def fbx_data_armature_elements(root, armature, scene_data):
             elem_data_single_int32(fbx_pose, b"NbPoseNodes", 1 + len(armature.data.bones))
 
             # First node is mesh/object.
-            mat_world_obj = matrix_to_array(obj.matrix_world)
+            mat_world_obj = obj.matrix_world
             fbx_posenode = elem_empty(fbx_pose, b"PoseNode")
             elem_data_single_int64(fbx_posenode, b"Node", get_fbxuid_from_key(scene_data.objects[obj]))
-            elem_data_single_float64_array(fbx_posenode, b"Matrix", mat_world_obj)
+            elem_data_single_float64_array(fbx_posenode, b"Matrix", matrix_to_array(mat_world_obj))
             # And all bones of armature!
             armmat = armature.matrix_world
             mat_world_bones = {}
             for bo in armature.data.bones:
-                bomat = matrix_to_array(armmat * bo.matrix_local * MAT_CONVERT_BONE)
+                bomat = armmat * bo.matrix_local * MAT_CONVERT_BONE
                 mat_world_bones[bo] = bomat
                 fbx_posenode = elem_empty(fbx_pose, b"PoseNode")
                 elem_data_single_int64(fbx_posenode, b"Node", get_fbxuid_from_key(scene_data.objects[bo]))
-                elem_data_single_float64_array(fbx_posenode, b"Matrix", bomat)
+                elem_data_single_float64_array(fbx_posenode, b"Matrix", matrix_to_array(bomat))
 
             # Deformer.
             fbx_skin = elem_data_single_int64(root, b"Deformer", get_fbxuid_from_key(skin_key))
@@ -1375,8 +1375,12 @@ def fbx_data_armature_elements(root, armature, scene_data):
                     elem_data_single_float64_array(fbx_clstr, b"Weights", weights)
                 # Transform and TransformLink matrices...
                 # They seem to be mostly the same as BindPose ones???
-                elem_data_single_float64_array(fbx_clstr, b"Transform", mat_world_obj)
-                elem_data_single_float64_array(fbx_clstr, b"TransformLink", mat_world_bones[bo])
+                # WARNING! Even though official FBX API presents Transform in global space,
+                #          **it is stored in bone space in FBX data!** See
+                #           http://area.autodesk.com/forum/autodesk-fbx/fbx-sdk/why-the-values-return-by-fbxcluster-gettransformmatrix-x-not-same-with-the-value-in-ascii-fbx-file/
+                elem_data_single_float64_array(fbx_clstr, b"Transform",
+                                               matrix_to_array(mat_world_bones[bo].inverted() * mat_world_obj))
+                elem_data_single_float64_array(fbx_clstr, b"TransformLink", matrix_to_array(mat_world_bones[bo]))
 
 
 def fbx_data_object_elements(root, obj, scene_data):
