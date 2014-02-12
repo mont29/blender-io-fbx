@@ -525,7 +525,7 @@ def fbx_template_def_cameraswitcher(scene, settings, override_defaults=None, nbr
     return FBXTemplate(b"NodeAttribute", b"FbxCameraSwitcher", props, nbr_users)
 
 
-def fbx_template_def_bone(gmat, gscale, override_defaults=None, nbr_users=0):
+def fbx_template_def_bone(scene, settings, override_defaults=None, nbr_users=0):
     props = {}
     if override_defaults is not None:
         props.update(override_defaults)
@@ -632,14 +632,14 @@ def fbx_template_def_video(scene, settings, override_defaults=None, nbr_users=0)
     return FBXTemplate(b"Video", b"FbxVideo", props, nbr_users)
 
  
-def fbx_template_def_pose(gmat, gscale, override_defaults=None, nbr_users=0):
+def fbx_template_def_pose(scene, settings, override_defaults=None, nbr_users=0):
     props = {}
     if override_defaults is not None:
         props.update(override_defaults)
     return FBXTemplate(b"Pose", b"", props, nbr_users)
 
 
-def fbx_template_def_deformer(gmat, gscale, override_defaults=None, nbr_users=0):
+def fbx_template_def_deformer(scene, settings, override_defaults=None, nbr_users=0):
     props = {}
     if override_defaults is not None:
         props.update(override_defaults)
@@ -694,7 +694,6 @@ def fbx_data_lamp_elements(root, lamp, scene_data):
     Write the Lamp data block.
     """
     gscale = scene_data.settings.global_scale
-    gmat = scene_data.settings.global_matrix
 
     lamp_key = scene_data.data_lamps[lamp]
     do_light = True
@@ -735,7 +734,6 @@ def fbx_data_camera_elements(root, cam_obj, scene_data):
     Write the Camera and CameraSwitcher data blocks.
     """
     gscale = scene_data.settings.global_scale
-    gmat = scene_data.settings.global_matrix
 
     cam_data = cam_obj.data
     cam_key, cam_switcher_key, cam_switcher_object_key = scene_data.data_cameras[cam_obj]
@@ -1388,9 +1386,6 @@ def fbx_data_object_elements(root, obj, scene_data):
     Write the Object (Model) data blocks.
     Note we handle "Model" part of bones as well here!
     """
-    gscale = scene_data.settings.global_scale
-    gmat = scene_data.settings.global_matrix
-
     obj_type = b"Null"  # default, sort of empty...
     if isinstance(obj, bpy.types.Bone):
         obj_type = b"LimbNode"
