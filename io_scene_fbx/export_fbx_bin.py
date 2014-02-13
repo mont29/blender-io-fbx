@@ -64,6 +64,8 @@ FBX_TEXTURE_VERSION = 202
 
 FBX_NAME_CLASS_SEP = b"\x00\x01"
 
+FBX_KTIME = 46186158000  # This number of "ktimes" in one second (yep, precision over the nanosecond...)
+
 
 MAT_CONVERT_LAMP = Matrix.Rotation(math.pi / 2.0, 4, 'X')
 MAT_CONVERT_CAMERA = Matrix.Rotation(math.pi / 2.0, 4, 'Y')
@@ -100,6 +102,8 @@ UNITS = {
     "turn": 1.0,  # Ref unit!
     "degree": 360.0,
     "radian": math.pi * 2.0,
+    "second": 1.0,  # Ref unit!
+    "ktime": FBX_KTIME,
 }
 
 def units_convert(val, u_from, u_to):
@@ -1909,7 +1913,7 @@ def fbx_header_elements(root, scene_data, time=None):
     # XXX Those time stuff is taken from a file, have no (complete) idea what it means!
     elem_props_set(props, "p_enum", b"TimeMode", 11)
     elem_props_set(props, "p_timestamp", b"TimeSpanStart", 0)
-    elem_props_set(props, "p_timestamp", b"TimeSpanStop", 479181389250)
+    elem_props_set(props, "p_timestamp", b"TimeSpanStop", 46186158000)  # XXX One second!
 
     ##### End of GlobalSettings element.
 
