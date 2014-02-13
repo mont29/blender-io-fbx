@@ -267,6 +267,11 @@ class ExportFBX(bpy.types.Operator, ExportHelper):
             default=6.0,  # default: 10^-4 frames.
             )
     path_mode = path_reference_mode
+    embed_textures = BoolProperty(
+            name="Embed Textures",
+            description="Embed textures in FBX binary file (only for \"Copy\" path mode!)",
+            default=False,
+            )
     batch_mode = EnumProperty(
             name="Batch Mode",
             items=(('OFF', "Off", "Active scene to file"),

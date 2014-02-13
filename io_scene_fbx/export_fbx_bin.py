@@ -571,7 +571,7 @@ def fbx_template_def_material(scene, settings, override_defaults=None, nbr_users
         b"Shininess": ((50.0 - 1.0) / 5.10, "p_number"),
         b"ShininessExponent": ((50.0 - 1.0) / 5.10, "p_number"),
         b"ReflectionColor": ((1.0, 1.0, 1.0), "p_color_rgb"),
-        b"RefectionFactor": (0.0, "p_number"),
+        b"ReflectionFactor": (0.0, "p_number"),
     }
     if override_defaults is not None:
         props.update(override_defaults)
@@ -1182,6 +1182,7 @@ def fbx_data_material_elements(root, mat, scene_data):
 
     tmpl = scene_data.templates[b"Material"]
     props = elem_properties(fbx_mat)
+    elem_props_template_set(tmpl, props, "p_string", b"ShadingModel", mat_type.decode())
     elem_props_template_set(tmpl, props, "p_color_rgb", b"EmissiveColor", mat.diffuse_color)
     elem_props_template_set(tmpl, props, "p_number", b"EmissiveFactor", mat.emit)
     elem_props_template_set(tmpl, props, "p_color_rgb", b"AmbientColor", ambient_color)
@@ -1205,7 +1206,7 @@ def fbx_data_material_elements(root, mat, scene_data):
         elem_props_template_set(tmpl, props, "p_number", b"Shininess", (mat.specular_hardness - 1.0) / 5.10)
         elem_props_template_set(tmpl, props, "p_number", b"ShininessExponent", (mat.specular_hardness - 1.0) / 5.10)
         elem_props_template_set(tmpl, props, "p_color_rgb", b"ReflectionColor", mat.mirror_color)
-        elem_props_template_set(tmpl, props, "p_number", b"RefectionFactor",
+        elem_props_template_set(tmpl, props, "p_number", b"ReflectionFactor",
                                 mat.raytrace_mirror.reflect_factor if mat.raytrace_mirror.use else 0.0)
 
 
@@ -1296,7 +1297,7 @@ def fbx_data_video_elements(root, vid, scene_data):
 
     if scene_data.settings.media_settings.embed_textures:
         try:
-            with open(vid.filepath, 'b') as f:
+            with open(vid.filepath, 'br') as f:
                 elem_data_single_byte_array(fbx_vid, b"Content", f.read())
         except Exception as e:
             print("WARNING: embeding file {} failed ({})".format(vid.filepath, e))
@@ -1492,15 +1493,37 @@ def fbx_mat_properties_from_texture(tex):
     # Tex influence does not exists in FBX, so assume influence < 0.5 = no influence... :/
     INFLUENCE_THRESHOLD = 0.5
 
+    # Mapping Blender -> FBX (blend_use_name, blend_fact_name, fbx_name).
+    blend_to_fbx = (
+        # Lambert & Phong...
+        ("diffuse", "diffuse", b"DiffuseFactor"),
+        ("color_diffuse", "diffuse_color", b"DiffuseColor"),
+        ("alpha", "alpha", b"TransparencyFactor"),
+        ("diffuse", "diffuse", b"TransparentColor"),  # Uses diffuse color in Blender!
+        ("emit", "emit", b"EmissiveFactor"),
+        ("diffuse", "diffuse", b"EmissiveColor"),  # Uses diffuse color in Blender!
+        ("ambient", "ambient", b"AmbientFactor"),
+        #("", "", b"AmbientColor"),  # World stuff in Blender, for now ignore...
+        # Those are for later!
+        #("", "", b"NormalMap"),
+        #("", "", b"Bump"),
+        #("", "", b"BumpFactor"),
+        #("", "", b"DisplacementColor"),
+        #("", "", b"DisplacementFactor"),
+        # Phong only.
+        ("specular", "specular", b"SpecularFactor"),
+        ("color_spec", "specular_color", b"SpecularColor"),
+        # See Material template about those two!
+        ("hardness", "hardness", b"Shininess"),
+        ("hardness", "hardness", b"ShininessExponent"),
+        ("mirror", "mirror", b"ReflectionColor"),
+        ("raymir", "raymir", b"ReflectionFactor"),
+    )
+
     tex_fbx_props = set()
-    # mat is assumed to be Lambert diffuse...
-    if tex.use_map_diffuse and tex.diffuse_factor >= INFLUENCE_THRESHOLD:
-        tex_fbx_props.add(b"DiffuseFactor")
-    if tex.use_map_color_diffuse and tex.diffuse_color_factor >= INFLUENCE_THRESHOLD:
-        tex_fbx_props.add(b"Diffuse")
-    if tex.use_map_alpha and tex.alpha_factor >= INFLUENCE_THRESHOLD:
-        tex_fbx_props.add(b"TransparencyFactor")
-    # etc., will complete the list later.
+    for use_map_name, name_factor, fbx_prop_name in blend_to_fbx:
+        if getattr(tex, "use_map_" + use_map_name) and getattr(tex, name_factor + "_factor") >= INFLUENCE_THRESHOLD:
+            tex_fbx_props.add(fbx_prop_name)
 
     return tex_fbx_props
 
