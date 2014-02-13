@@ -305,9 +305,7 @@ class ExportFBX(bpy.types.Operator, ExportHelper):
                                          to_up=self.axis_up,
                                          ).to_4x4())
 
-        keywords = self.as_keywords(ignore=("axis_forward",
-                                            "axis_up",
-                                            "global_scale",
+        keywords = self.as_keywords(ignore=("global_scale",
                                             "check_existing",
                                             "filter_glob",
                                             ))

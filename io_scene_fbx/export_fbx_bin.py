@@ -67,9 +67,12 @@ FBX_NAME_CLASS_SEP = b"\x00\x01"
 FBX_KTIME = 46186158000  # This number of "ktimes" in one second (yep, precision over the nanosecond...)
 
 
-MAT_CONVERT_LAMP = Matrix.Rotation(math.pi / 2.0, 4, 'X')
-MAT_CONVERT_CAMERA = Matrix.Rotation(math.pi / 2.0, 4, 'Y')
-MAT_CONVERT_BONE = Matrix.Rotation(math.pi / 2.0, 4, 'Z')
+MAT_CONVERT_LAMP = Matrix.Rotation(math.pi / 2.0, 4, 'X')  # Blender is -Z, FBX is -Y.
+MAT_CONVERT_CAMERA = Matrix.Rotation(math.pi / 2.0, 4, 'Y')  # Blender is -Z, FBX is +X.
+# XXX Is this really needed? Child bone is defined by a matrix from its parent, there should not be any
+#     need for rotation here?
+MAT_CONVERT_BONE = Matrix.Rotation(math.pi / -2.0, 4, 'Z')  # Blender is +Y, FBX is +X.
+#MAT_CONVERT_BONE = Matrix()
 
 
 # Lamps.
@@ -117,7 +120,37 @@ def units_convert(val, u_from, u_to):
 
 def matrix_to_array(mat):
     """Concatenate matrix's columns into a single, flat tuple"""
-    return tuple(chain(*mat.col))
+    # blender matrix is row major, fbx is col major so transpose on write
+    return tuple(f for v in mat.transposed() for f in v)
+
+
+RIGHT_HAND_AXES = {
+    # Up, Front -> FBX values (tuples of (axis, sign), Up, Front, Coord).
+    ('X',  'Y'):  ((0, 1),  (1, 1),  (2, -1)),
+    ('X',  '-Y'): ((0, 1),  (1, -1), (2, 1)),
+    ('X',  'Z'):  ((0, 1),  (2, 1),  (1, 1)),
+    ('X',  '-Z'): ((0, 1),  (2, -1), (1, -1)),
+    ('-X', 'Y'):  ((0, -1), (1, 1),  (2, 1)),
+    ('-X', '-Y'): ((0, -1), (1, -1), (2, -1)),
+    ('-X', 'Z'):  ((0, -1), (2, 1),  (1, -1)),
+    ('-X', '-Z'): ((0, -1), (2, -1), (1, 1)),
+    ('Y',  'X'):  ((1, 1),  (0, 1),  (2, 1)),
+    ('Y',  '-X'): ((1, 1),  (0, -1), (2, -1)),
+    ('Y',  'Z'):  ((1, 1),  (2, 1),  (0, -1)),
+    ('Y',  '-Z'): ((1, 1),  (2, -1), (0, 1)),
+    ('-Y', 'X'):  ((1, -1), (0, 1),  (2, -1)),
+    ('-Y', '-X'): ((1, -1), (0, -1), (2, 1)),
+    ('-Y', 'Z'):  ((1, -1), (2, 1),  (0, 1)),
+    ('-Y', '-Z'): ((1, -1), (2, -1), (0, -1)),
+    ('Z',  'X'):  ((2, 1),  (0, 1),  (1, -1)),
+    ('Z',  '-X'): ((2, 1),  (0, -1), (1, 1)),
+    ('Z',  'Y'):  ((2, 1),  (1, 1),  (0, 1)),  # Blender system!
+    ('Z',  '-Y'): ((2, 1),  (1, -1), (0, -1)),
+    ('-Z', 'X'):  ((2, -1), (0, 1),  (1, 1)),
+    ('-Z', '-X'): ((2, -1), (0, -1), (1, -1)),
+    ('-Z', 'Y'):  ((2, -1), (1, 1),  (0, -1)),
+    ('-Z', '-Y'): ((2, -1), (1, -1), (0, 1)),
+}
 
 
 ##### UIDs code. #####
@@ -1321,12 +1354,16 @@ def fbx_data_armature_elements(root, armature, scene_data):
     """
 
     # Bones "data".
+    tmpl = scene_data.templates[b"Bone"]
     for bo in armature.data.bones:
         _bo_key, bo_data_key, _arm = scene_data.data_bones[bo]
         fbx_bo = elem_data_single_int64(root, b"NodeAttribute", get_fbxuid_from_key(bo_data_key))
         fbx_bo.add_string(fbx_name_class(bo.name.encode(), b"NodeAttribute"))
         fbx_bo.add_string(b"LimbNode")
         elem_data_single_string(fbx_bo, b"TypeFlags", b"Skeleton")    
+
+        props = elem_properties(fbx_bo)
+        elem_props_template_set(tmpl, props, "p_number", b"Size", (bo.tail_local - bo.head_local).length)
 
     # Deformers and BindPoses.
     # Note: we might also use Deformers for our "parent to vertex" stuff???
@@ -1901,12 +1938,13 @@ def fbx_header_elements(root, scene_data, time=None):
     elem_data_single_int32(global_settings, b"Version", 1000)
 
     props = elem_properties(global_settings)
-    elem_props_set(props, "p_integer", b"UpAxis", 1)
-    elem_props_set(props, "p_integer", b"UpAxisSign", 1)
-    elem_props_set(props, "p_integer", b"FrontAxis", 2)
-    elem_props_set(props, "p_integer", b"FrontAxisSign", 1)
-    elem_props_set(props, "p_integer", b"CoordAxis", 0)
-    elem_props_set(props, "p_integer", b"CoordAxisSign", 1)
+    up_axis, front_axis, coord_axis = RIGHT_HAND_AXES[scene_data.settings.to_axes]
+    elem_props_set(props, "p_integer", b"UpAxis", up_axis[0])
+    elem_props_set(props, "p_integer", b"UpAxisSign", up_axis[1])
+    elem_props_set(props, "p_integer", b"FrontAxis", front_axis[0])
+    elem_props_set(props, "p_integer", b"FrontAxisSign", front_axis[1])
+    elem_props_set(props, "p_integer", b"CoordAxis", coord_axis[0])
+    elem_props_set(props, "p_integer", b"CoordAxisSign", coord_axis[1])
     elem_props_set(props, "p_number", b"UnitScaleFactor", 1.0)
     elem_props_set(props, "p_color_rgb", b"AmbientColor", (0.0, 0.0, 0.0))
     elem_props_set(props, "p_string", b"DefaultCamera", "Producer Perspective")
@@ -2021,7 +2059,7 @@ FBXSettingsMedia = namedtuple("FBXSettingsMedia", (
     "embed_textures", "copy_set",
 ))
 FBXSettings = namedtuple("FBXSettings", (
-    "global_matrix", "global_scale", "context_objects", "object_types", "use_mesh_modifiers",
+    "to_axes", "global_matrix", "global_scale", "context_objects", "object_types", "use_mesh_modifiers",
     "mesh_smooth_type", "use_mesh_edges", "use_tspace", "use_armature_deform_only",
     "use_anim", "use_anim_optimize", "anim_optimize_precision", "use_anim_action_all", "use_default_take",
     "use_metadata", "media_settings",
@@ -2030,6 +2068,8 @@ FBXSettings = namedtuple("FBXSettings", (
 # This func can be called with just the filepath
 def save_single(operator, scene, filepath="",
                 global_matrix=Matrix(),
+                axis_up="Z",
+                axis_forward="Y",
                 context_objects=None,
                 object_types=None,
                 use_mesh_modifiers=True,
@@ -2070,7 +2110,7 @@ def save_single(operator, scene, filepath="",
     )
 
     settings = FBXSettings(
-        global_matrix, global_scale, context_objects, object_types, use_mesh_modifiers,
+        (axis_up, axis_forward), global_matrix, global_scale, context_objects, object_types, use_mesh_modifiers,
         mesh_smooth_type, use_mesh_edges, use_tspace, use_armature_deform_only,
         use_anim, use_anim_optimize, anim_optimize_precision, use_anim_action_all, use_default_take,
         use_metadata, media_settings,
