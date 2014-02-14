@@ -215,12 +215,6 @@ def get_blenderID_key(bid):
     return "B" + bid.rna_type.name + "::" + bid.name
 
 
-def get_blender_camera_keys(cam):
-    """Return cam + cam switcher keys."""
-    key = get_blenderID_key(cam)
-    return key, key + "_Switcher", key + "_SwitcherObject"
-
-
 def get_blender_bone_key(armature, bone):
     """Return bone's keys (Model and NodeAttribute)."""
     key = "|".join((get_blenderID_key(armature), get_blenderID_key(bone)))
@@ -552,16 +546,6 @@ def fbx_template_def_camera(scene, settings, override_defaults=None, nbr_users=0
     return FBXTemplate(b"NodeAttribute", b"FbxCamera", props, nbr_users)
 
 
-def fbx_template_def_cameraswitcher(scene, settings, override_defaults=None, nbr_users=0):
-    props = {
-        b"Color": ((0.8, 0.8, 0.8), "p_color_rgb"),
-        b"Camera Index": (1, "p_integer"),
-    }
-    if override_defaults is not None:
-        props.update(override_defaults)
-    return FBXTemplate(b"NodeAttribute", b"FbxCameraSwitcher", props, nbr_users)
-
-
 def fbx_template_def_bone(scene, settings, override_defaults=None, nbr_users=0):
     props = {}
     if override_defaults is not None:
@@ -785,27 +769,12 @@ def fbx_data_lamp_elements(root, lamp, scene_data):
 
 def fbx_data_camera_elements(root, cam_obj, scene_data):
     """
-    Write the Camera and CameraSwitcher data blocks.
+    Write the Camera data blocks.
     """
     gscale = scene_data.settings.global_scale
 
     cam_data = cam_obj.data
-    cam_key, cam_switcher_key, cam_switcher_object_key = scene_data.data_cameras[cam_obj]
-
-    # Have no idea what are cam switchers...
-    cam_switcher = elem_data_single_int64(root, b"NodeAttribute", get_fbxuid_from_key(cam_switcher_key))
-    cam_switcher.add_string(fbx_name_class(cam_data.name.encode() + b"_switcher", b"NodeAttribute"))
-    cam_switcher.add_string(b"CameraSwitcher")
-
-    tmpl = scene_data.templates[b"CameraSwitcher"]
-    props = elem_properties(cam_switcher)
-    elem_props_template_set(tmpl, props, "p_integer", b"Camera Index", 100)
-
-    elem_data_single_int32(cam_switcher, b"Version", 101)
-    elem_data_single_string_unicode(cam_switcher, b"Name", cam_data.name + " switcher")
-    elem_data_single_int32(cam_switcher, b"CameraID", 100)  # ???
-    elem_data_single_int32(cam_switcher, b"CameraName", 100)  # ??? Integer???????
-    elem_empty(cam_switcher, b"CameraIndexName")  # ???
+    cam_key = scene_data.data_cameras[cam_obj]
 
     # Real data now, good old camera!
     # Object transform info.
@@ -1492,22 +1461,6 @@ def fbx_data_object_elements(root, obj, scene_data):
         elem_props_template_set(tmpl, props, "p_enum", b"BackgroundMode", 0)  # Don't know what it means
         elem_props_template_set(tmpl, props, "p_bool", b"ForegroundTransparent", True)
 
-        # And - houra! - we also have to add a fake object for the cam switcher.
-        _1, _2, obj_cam_switcher_key = scene_data.data_cameras[obj]
-        cam_switcher_model = elem_data_single_int64(root, b"Model", get_fbxuid_from_key(obj_cam_switcher_key))
-        cam_switcher_model.add_string(fbx_name_class(obj.name.encode() + b"_switcher", b"Model"))
-        cam_switcher_model.add_string(b"CameraSwitcher")
-
-        elem_data_single_int32(cam_switcher_model, b"Version", FBX_MODELS_VERSION)
-
-        elem_properties(cam_switcher_model)
-        # Nothing to add (loc/rot/scale has no importance here).
-
-        elem_data_single_int32(cam_switcher_model, b"MultiLayer", 0)
-        elem_data_single_int32(cam_switcher_model, b"MultiTake", 1)
-        elem_data_single_bool(cam_switcher_model, b"Shading", True)
-        elem_data_single_string(cam_switcher_model, b"Culling", b"CullingOff")
-
 
 ##### Top-level FBX data container. #####
 
@@ -1635,7 +1588,7 @@ def fbx_data_from_scene(scene, settings):
     objects = {obj: get_blenderID_key(obj) for obj in scene.objects if obj.type in objtypes}
     data_lamps = {obj.data: get_blenderID_key(obj.data) for obj in objects if obj.type == 'LAMP'}
     # Unfortunately, FBX camera data contains object-level data (like position, orientation, etc.)...
-    data_cameras = {obj: get_blender_camera_keys(obj.data) for obj in objects if obj.type == 'CAMERA'}
+    data_cameras = {obj: get_blenderID_key(obj.data) for obj in objects if obj.type == 'CAMERA'}
     data_meshes = {obj.data: get_blenderID_key(obj.data) for obj in objects if obj.type == 'MESH'}
 
     # Armatures!
@@ -1715,9 +1668,7 @@ def fbx_data_from_scene(scene, settings):
         templates[b"Light"] = fbx_template_def_light(scene, settings, nbr_users=len(data_lamps))
 
     if data_cameras:
-        nbr = len(data_cameras)
-        templates[b"Camera"] = fbx_template_def_camera(scene, settings, nbr_users=nbr)
-        templates[b"CameraSwitcher"] = fbx_template_def_cameraswitcher(scene, settings, nbr_users=nbr)
+        templates[b"Camera"] = fbx_template_def_camera(scene, settings, nbr_users=len(data_cameras))
 
     if data_bones:
         templates[b"Bone"] = fbx_template_def_bone(scene, settings, nbr_users=len(data_bones))
@@ -1726,8 +1677,7 @@ def fbx_data_from_scene(scene, settings):
         templates[b"Geometry"] = fbx_template_def_geometry(scene, settings, nbr_users=len(data_meshes))
 
     if objects:
-        # We use len(object) + len(data_cameras) because of the CameraSwitcher objects...
-        templates[b"Model"] = fbx_template_def_model(scene, settings, nbr_users=len(objects) + len(data_cameras))
+        templates[b"Model"] = fbx_template_def_model(scene, settings, nbr_users=len(objects))
 
     if arm_parents:
         # Number of Pose|BindPose elements should be the same as number of meshes-parented-to-armatures
@@ -1763,7 +1713,7 @@ def fbx_data_from_scene(scene, settings):
         # Bones are handled later.
         if isinstance(obj, bpy.types.Object):
             par = obj.parent
-            par_key = 0  # Convention, "top" node... ? Or root of Document?
+            par_key = 0  # Convention, "root" node (never explicitly written).
             if par and par in objects:
                 par_type = obj.parent_type
                 if par_type in {'OBJECT', 'BONE'}:
@@ -1785,11 +1735,7 @@ def fbx_data_from_scene(scene, settings):
         connections.append((b"OO", get_fbxuid_from_key(bo_key), get_fbxuid_from_key(objects[par]), None))
 
     # Cameras
-    # XXX CamSwitcher do not seem to be needed anymore!
-    for obj_cam, (cam_key, cam_switcher_key, cam_obj_switcher_key) in data_cameras.items():
-        # Looks like the 'object' ('Model' in FBX) for the camera switcher is not linked to anything in FBX...
-        connections.append((b"OO", get_fbxuid_from_key(cam_switcher_key), get_fbxuid_from_key(cam_obj_switcher_key),
-                            None))
+    for obj_cam, cam_key in data_cameras.items():
         cam_obj_key = objects[obj_cam]
         connections.append((b"OO", get_fbxuid_from_key(cam_key), get_fbxuid_from_key(cam_obj_key), None))
 
