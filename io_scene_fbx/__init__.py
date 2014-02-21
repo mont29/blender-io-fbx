@@ -150,12 +150,13 @@ class ExportFBX(bpy.types.Operator, ExportHelper):
     # List of operator properties, the attributes will be assigned
     # to the class instance from the operator settings before calling.
 
-    # Temp! only during dev time.
-    use_new_exporter = BoolProperty(
-            name="Use New Exporter",
-            description="Use the new (binary only) exporter code - WIP!",
-            default=True,
-            #options={'HIDDEN'},
+    version = EnumProperty(
+            items=(('BIN7400', "FBX 7.4 binary", "Newer 7.4 binary version, still in development (no animation yet)"),
+                   ('ASCII6100', "FBX 6.1 ASCII", "Legacy 6.1 ascii version"),
+                  ),
+            name="Exporter Version",
+            description="Choose which version of the exporter to use",
+            default='ASCII6100',
             )
 
     use_selection = BoolProperty(
@@ -312,7 +313,7 @@ class ExportFBX(bpy.types.Operator, ExportHelper):
 
         keywords["global_matrix"] = global_matrix
 
-        if self.use_new_exporter:
+        if self.version == 'BIN7400':
             from . import export_fbx_bin
             return export_fbx_bin.save(self, context, **keywords)
         else:
