@@ -69,10 +69,7 @@ FBX_KTIME = 46186158000  # This number of "ktimes" in one second (yep, precision
 
 MAT_CONVERT_LAMP = Matrix.Rotation(math.pi / 2.0, 4, 'X')  # Blender is -Z, FBX is -Y.
 MAT_CONVERT_CAMERA = Matrix.Rotation(math.pi / 2.0, 4, 'Y')  # Blender is -Z, FBX is +X.
-# XXX Is this really needed? Child bone is defined by a matrix from its parent, there should not be any
-#     need for rotation here?
-MAT_CONVERT_BONE = Matrix.Rotation(math.pi / -2.0, 4, 'Z')  # Blender is +Y, FBX is +X.
-#MAT_CONVERT_BONE = Matrix()
+MAT_CONVERT_BONE = Matrix() #Matrix.Rotation(math.pi / -2.0, 4, 'X')  # Blender is +Y, FBX is +Z.
 
 
 # Lamps.
@@ -694,7 +691,7 @@ def object_matrix(scene_data, obj, armature=None, global_space=False):
     elif obj.type == 'CAMERA':
         matrix = matrix * MAT_CONVERT_CAMERA
 
-    # Up till here, our matrix is in local space, time to bring them in their final desired space.
+    # Up till here, our matrix is in local space, time to bring it in its final desired space.
     if is_bone:
         # Bones are in armature (object) space currently, either bring them to global space or real
         # local space (relative to parent bone).
