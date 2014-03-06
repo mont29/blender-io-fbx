@@ -725,6 +725,19 @@ def fbx_name_class(name, cls):
     return FBX_NAME_CLASS_SEP.join((name, cls))
 
 
+def fbx_data_element_custom_properties(tmpl, props, bid):
+    """
+    Store custom properties of blender ID bid (any mapping-like object, in fact) into FBX properties props.
+    """
+    for k, v in bid.items():
+        if isinstance(v, str):
+            elem_props_template_set(tmpl, props, "p_string", k.encode(), v)
+        elif isinstance(v, int):
+            elem_props_template_set(tmpl, props, "p_integer", k.encode(), v)
+        if isinstance(v, float):
+            elem_props_template_set(tmpl, props, "p_number", k.encode(), v)
+
+
 def fbx_data_lamp_elements(root, lamp, scene_data):
     """
     Write the Lamp data block.
@@ -763,6 +776,10 @@ def fbx_data_lamp_elements(root, lamp, scene_data):
         elem_props_template_set(tmpl, props, "p_number", b"OuterAngle", math.degrees(lamp.spot_size))
         elem_props_template_set(tmpl, props, "p_number", b"InnerAngle",
                                 math.degrees(lamp.spot_size * (1.0 - lamp.spot_blend)))
+
+    # Custom properties.
+    if scene_data.settings.use_custom_properties:
+        fbx_data_element_custom_properties(tmpl, props, lamp)
 
 
 def fbx_data_camera_elements(root, cam_obj, scene_data):
@@ -826,6 +843,10 @@ def fbx_data_camera_elements(root, cam_obj, scene_data):
     elem_props_template_set(tmpl, props, "p_enum", b"BackPlaneDistanceMode", 1)  # RelativeToCamera.
     elem_props_template_set(tmpl, props, "p_number", b"BackPlaneDistance", cam_data.clip_end * gscale)
 
+    # Custom properties.
+    if scene_data.settings.use_custom_properties:
+        fbx_data_element_custom_properties(tmpl, props, cam_data)
+
     elem_data_single_string(cam, b"TypeFlags", b"Camera")
     elem_data_single_int32(cam, b"GeometryVersion", 124)  # Sic...
     elem_data_vec_float64(cam, b"Position", loc)
@@ -848,6 +869,13 @@ def fbx_data_mesh_elements(root, me, scene_data):
     geom = elem_data_single_int64(root, b"Geometry", get_fbxuid_from_key(me_key))
     geom.add_string(fbx_name_class(me.name.encode(), b"Geometry"))
     geom.add_string(b"Mesh")
+
+    tmpl = scene_data.templates[b"Geometry"]
+    props = elem_properties(geom)
+
+    # Custom properties.
+    if scene_data.settings.use_custom_properties:
+        fbx_data_element_custom_properties(tmpl, props, me)
 
     elem_data_single_int32(geom, b"GeometryVersion", FBX_GEOMETRY_VERSION)
 
@@ -1213,6 +1241,10 @@ def fbx_data_material_elements(root, mat, scene_data):
         elem_props_template_set(tmpl, props, "p_number", b"ReflectionFactor",
                                 mat.raytrace_mirror.reflect_factor if mat.raytrace_mirror.use else 0.0)
 
+    # Custom properties.
+    if scene_data.settings.use_custom_properties:
+        fbx_data_element_custom_properties(tmpl, props, mat)
+
 
 def _gen_vid_path(img, scene_data):
     msetts = scene_data.settings.media_settings
@@ -1228,7 +1260,6 @@ def fbx_data_texture_file_elements(root, tex, scene_data):
     """
     # XXX All this is very fuzzy to me currently...
     #     Textures do not seem to use properties as much as they could.
-    #     And I found even in 7.4 files VideoTexture used for mere png's... :/
     #     For now assuming most logical and simple stuff.
 
     tex_key, _mats = scene_data.data_textures[tex]
@@ -1282,6 +1313,10 @@ def fbx_data_texture_file_elements(root, tex, scene_data):
     elem_props_template_set(tmpl, props, "p_vector_3d", b"Scaling", tex.scale)
     elem_props_template_set(tmpl, props, "p_bool", b"UseMipMap", tex.texture.use_mipmap)
 
+    # Custom properties.
+    if scene_data.settings.use_custom_properties:
+        fbx_data_element_custom_properties(tmpl, props, tex.texture)
+
  
 def fbx_data_video_elements(root, vid, scene_data):
     """
@@ -1331,6 +1366,11 @@ def fbx_data_armature_elements(root, armature, scene_data):
 
         props = elem_properties(fbx_bo)
         elem_props_template_set(tmpl, props, "p_number", b"Size", (bo.tail_local - bo.head_local).length)
+
+        # Custom properties.
+        if scene_data.settings.use_custom_properties:
+            fbx_data_element_custom_properties(tmpl, props, bo)
+
 
     # Deformers and BindPoses.
     # Note: we might also use Deformers for our "parent to vertex" stuff???
@@ -1438,6 +1478,10 @@ def fbx_data_object_elements(root, obj, scene_data):
     elem_props_template_set(tmpl, props, "p_lcl_scaling", b"Lcl Scaling", scale)
 
     # TODO: "constraints" (limit loc/rot/scale, and target-to-object).
+
+    # Custom properties.
+    if scene_data.settings.use_custom_properties:
+        fbx_data_element_custom_properties(tmpl, props, obj)
 
     # Those settings would obviously need to be edited in a complete version of the exporter, may depends on
     # object type, etc.
@@ -2006,7 +2050,7 @@ FBXSettings = namedtuple("FBXSettings", (
     "to_axes", "global_matrix", "global_scale", "context_objects", "object_types", "use_mesh_modifiers",
     "mesh_smooth_type", "use_mesh_edges", "use_tspace", "use_armature_deform_only",
     "use_anim", "use_anim_optimize", "anim_optimize_precision", "use_anim_action_all", "use_default_take",
-    "use_metadata", "media_settings",
+    "use_metadata", "media_settings", "use_custom_properties",
 ))
 
 # This func can be called with just the filepath
@@ -2029,6 +2073,7 @@ def save_single(operator, scene, filepath="",
                 use_tspace=True,
                 use_default_take=True,
                 embed_textures=False,
+                use_custom_properties=False,
                 **kwargs
                 ):
 
@@ -2057,7 +2102,7 @@ def save_single(operator, scene, filepath="",
         (axis_up, axis_forward), global_matrix, global_scale, context_objects, object_types, use_mesh_modifiers,
         mesh_smooth_type, use_mesh_edges, use_tspace, use_armature_deform_only,
         use_anim, use_anim_optimize, anim_optimize_precision, use_anim_action_all, use_default_take,
-        use_metadata, media_settings,
+        use_metadata, media_settings, use_custom_properties,
     )
 
     import bpy_extras.io_utils

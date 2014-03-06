@@ -231,6 +231,11 @@ class ExportFBX(bpy.types.Operator, ExportHelper):
                          "(will only work correctly with tris/quads only meshes!)"),
             default=False,
             )
+    use_custom_properties = BoolProperty(
+            name="Custom Properties",
+            description="Export custom properties",
+            default=False,
+            )
     use_armature_deform_only = BoolProperty(
             name="Only Deform Bones",
             description="Only write deforming bones",
